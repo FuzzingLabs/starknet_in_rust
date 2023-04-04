@@ -45,7 +45,11 @@ pub struct ContractEntryPoint {
     #[getset(get_copy = "pub")]
     pub(crate) offset: usize,
 }
-
+impl ContractEntryPoint {
+    pub fn get_offset(&self) -> String {
+        return self.offset.clone().to_string();
+    }
+}
 // -------------------------------
 //         Contract Class
 // -------------------------------
@@ -89,6 +93,15 @@ impl ContractClass {
         };
 
         Ok(())
+    }
+    pub fn from_string(program: &String) -> Result<Self, ContractClassError> {
+        let raw_contract_class: starknet_api::state::ContractClass =
+            match serde_json::from_str(program) {
+                Ok(cs) => cs,
+                Err(_) => return Err(ContractClassError::DisorderedBuiltins),
+            };
+        let contract_class = ContractClass::from(raw_contract_class);
+        Ok(contract_class)
     }
 }
 

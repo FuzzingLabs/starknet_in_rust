@@ -17,6 +17,7 @@ use cairo_rs::{
     types::relocatable::{MaybeRelocatable, Relocatable},
     vm::{
         runners::cairo_runner::{CairoArg, CairoRunner, ExecutionResources},
+        trace::trace_entry::TraceEntry,
         vm_core::VirtualMachine,
     },
 };
@@ -89,6 +90,7 @@ impl ExecutionEntryPoint {
             previous_cairo_usage,
             runner.hint_processor.syscall_handler,
             retdata,
+            runner.vm.get_trace().expect("could not get the trace"),
         )
     }
 
@@ -118,9 +120,9 @@ impl ExecutionEntryPoint {
         let entry_point = self.get_selected_entry_point(&contract_class, class_hash)?;
         // create starknet runner
 
-        let mut vm = VirtualMachine::new(false);
+        let mut vm = VirtualMachine::new(true);
         let mut cairo_runner = CairoRunner::new(&contract_class.program, "all", false)?;
-        cairo_runner.initialize_function_runner(&mut vm)?;
+        cairo_runner.initialize_function_runner(&mut vm, false)?;
 
         let mut tmp_state = T::default();
         let hint_processor =
@@ -223,13 +225,17 @@ impl ExecutionEntryPoint {
         previous_cairo_usage: ExecutionResources,
         syscall_handler: BusinessLogicSyscallHandler<S>,
         retdata: Vec<Felt252>,
+        trace: &Vec<TraceEntry>,
     ) -> Result<CallInfo, TransactionError>
     where
         S: State + StateReader,
     {
         let execution_resources =
             &syscall_handler.resources_manager.cairo_usage - &previous_cairo_usage;
-
+        let mut ret = Vec::<Relocatable>::new();
+        for i in trace {
+            ret.push(Relocatable::from((i.fp.clone() as isize, i.pc.clone())));
+        }
         Ok(CallInfo {
             caller_address: self.caller_address.clone(),
             call_type: Some(self.call_type.clone()),
@@ -248,6 +254,7 @@ impl ExecutionEntryPoint {
             storage_read_values: syscall_handler.starknet_storage_state.read_values,
             accessed_storage_keys: syscall_handler.starknet_storage_state.accessed_keys,
             internal_calls: syscall_handler.internal_calls,
+            trace: ret,
         })
     }
 

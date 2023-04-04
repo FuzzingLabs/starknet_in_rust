@@ -13,7 +13,6 @@ use cairo_rs::{
     vm::{runners::cairo_runner::ExecutionResources, vm_core::VirtualMachine},
 };
 use felt::Felt252;
-use getset::Getters;
 use num_traits::{ToPrimitive, Zero};
 use std::collections::{HashMap, HashSet};
 
@@ -44,6 +43,7 @@ pub struct CallInfo {
     pub storage_read_values: Vec<Felt252>,
     pub accessed_storage_keys: HashSet<ClassHash>,
     pub internal_calls: Vec<CallInfo>,
+    pub trace: Vec<Relocatable>,
 }
 
 impl CallInfo {
@@ -76,6 +76,7 @@ impl CallInfo {
             storage_read_values: Vec::new(),
             accessed_storage_keys: HashSet::new(),
             internal_calls: Vec::new(),
+            trace: Vec::new(),
         }
     }
 
@@ -208,6 +209,7 @@ impl Default for CallInfo {
                 builtin_instance_counter: HashMap::new(),
             },
             events: Vec::new(),
+            trace: Vec::new(),
         }
     }
 }
@@ -250,7 +252,7 @@ impl Event {
 //  Transaction Structures
 // -------------------------
 
-#[derive(Clone, Debug, Default, Getters)]
+#[derive(Clone, Debug, Default)]
 pub struct TransactionExecutionContext {
     pub(crate) n_emitted_events: u64,
     pub(crate) version: u64,
@@ -258,7 +260,6 @@ pub struct TransactionExecutionContext {
     pub(crate) max_fee: u64,
     pub(crate) transaction_hash: Felt252,
     pub(crate) signature: Vec<Felt252>,
-    #[get = "pub"]
     pub(crate) nonce: Felt252,
     pub(crate) n_sent_messages: usize,
     pub(crate) _n_steps: u64,

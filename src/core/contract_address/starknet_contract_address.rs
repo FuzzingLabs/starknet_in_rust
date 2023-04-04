@@ -169,7 +169,7 @@ pub fn compute_class_hash(contract_class: &ContractClass) -> Result<Felt252, Con
 
     let mut vm = VirtualMachine::new(false);
     let mut runner = CairoRunner::new(&program, "all", false)?;
-    runner.initialize_function_runner(&mut vm)?;
+    runner.initialize_function_runner(&mut vm, false)?;
     let mut hint_processor = BuiltinHintProcessor::new_empty();
 
     // 188 is the entrypoint since is the __main__.class_hash function in our compiled program identifier.
@@ -182,6 +182,7 @@ pub fn compute_class_hash(contract_class: &ContractClass) -> Result<Felt252, Con
         188,
         &[&hash_base.into(), contract_class_struct],
         true,
+        None,
         &mut vm,
         &mut hint_processor,
     )?;

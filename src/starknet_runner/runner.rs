@@ -70,6 +70,7 @@ where
             entrypoint,
             &args,
             verify_secure,
+            None,
             &mut self.vm,
             &mut self.hint_processor,
         )?;
@@ -105,18 +106,23 @@ where
     pub(crate) fn prepare_os_context(&mut self) -> Vec<MaybeRelocatable> {
         let syscall_segment = self.vm.add_memory_segment();
         let mut os_context = [syscall_segment.into()].to_vec();
-        let builtin_runners = self
-            .vm
-            .get_builtin_runners()
-            .clone()
-            .into_iter()
-            .collect::<HashMap<&str, BuiltinRunner>>();
+        let mut hashmap_builtin: HashMap<&str, BuiltinRunner> = HashMap::new();
+        let builtin_runners = self.vm.get_builtin_runners().clone();
+        for i in builtin_runners {
+            hashmap_builtin.insert(i.name(), i);
+        }
+        /*         let builtin_runners = self
+        .vm
+        .get_builtin_runners()
+        .clone()
+        .iter()
+        .collect::<HashMap<&str, BuiltinRunner>>(); */
         self.cairo_runner
             .get_program_builtins()
             .iter()
             .for_each(|builtin| {
-                if builtin_runners.contains_key(builtin.name()) {
-                    let b_runner = builtin_runners.get(builtin.name()).unwrap();
+                if hashmap_builtin.contains_key(builtin.name()) {
+                    let b_runner = hashmap_builtin.get(builtin.name()).unwrap();
                     let stack = b_runner.initial_stack();
                     os_context.extend(stack);
                 }
