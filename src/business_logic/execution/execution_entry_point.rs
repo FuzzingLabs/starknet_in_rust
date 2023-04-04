@@ -121,7 +121,7 @@ impl ExecutionEntryPoint {
         // create starknet runner
 
         let mut vm = VirtualMachine::new(true);
-        let mut cairo_runner = CairoRunner::new(&contract_class.program, "all", false)?;
+        let mut cairo_runner = CairoRunner::new(&contract_class.program, "small", false)?;
         cairo_runner.initialize_function_runner(&mut vm, false)?;
 
         let mut tmp_state = T::default();

@@ -526,7 +526,7 @@ dependencies = [
 [[package]]
 name = "cairo-felt"
 version = "0.3.0-rc1"
-source = "git+https://github.com/FuzzingLabs/cairo-rs/?rev=1f013313a02e50e33bc8b54c9aed416cc11e9da8#1f013313a02e50e33bc8b54c9aed416cc11e9da8"
+source = "git+https://github.com/FuzzingLabs/cairo-rs/?rev=80a032a203788b00ebe3f1655bd16396e547ef17#80a032a203788b00ebe3f1655bd16396e547ef17"
 dependencies = [
  "lazy_static",
  "num-bigint",
@@ -538,7 +538,7 @@ dependencies = [
 [[package]]
 name = "cairo-take_until_unbalanced"
 version = "0.24.2-rc1"
-source = "git+https://github.com/FuzzingLabs/cairo-rs/?rev=1f013313a02e50e33bc8b54c9aed416cc11e9da8#1f013313a02e50e33bc8b54c9aed416cc11e9da8"
+source = "git+https://github.com/FuzzingLabs/cairo-rs/?rev=80a032a203788b00ebe3f1655bd16396e547ef17#80a032a203788b00ebe3f1655bd16396e547ef17"
 dependencies = [
  "nom",
 ]
@@ -577,7 +577,7 @@ dependencies = [
 [[package]]
 name = "cairo-vm"
 version = "0.3.0-rc1"
-source = "git+https://github.com/FuzzingLabs/cairo-rs/?rev=1f013313a02e50e33bc8b54c9aed416cc11e9da8#1f013313a02e50e33bc8b54c9aed416cc11e9da8"
+source = "git+https://github.com/FuzzingLabs/cairo-rs/?rev=80a032a203788b00ebe3f1655bd16396e547ef17#80a032a203788b00ebe3f1655bd16396e547ef17"
 dependencies = [
  "anyhow",
  "bincode",
