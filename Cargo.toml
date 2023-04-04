@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-cairo-rs = { git="https://github.com/FuzzingLabs/cairo-rs/", package = "cairo-vm", rev="1f013313a02e50e33bc8b54c9aed416cc11e9da8"}
-felt = { git="https://github.com/FuzzingLabs/cairo-rs/", package = "cairo-felt", rev="1f013313a02e50e33bc8b54c9aed416cc11e9da8"}
+cairo-rs = { git="https://github.com/FuzzingLabs/cairo-rs/", package = "cairo-vm", rev="5b5dea8e4bd6fc1716023acb8fa95ceccb1abcea"}
+felt = { git="https://github.com/FuzzingLabs/cairo-rs/", package = "cairo-felt", rev="5b5dea8e4bd6fc1716023acb8fa95ceccb1abcea"}
 getset = "0.1.2"
 lazy_static = "1.4.0"
 num-bigint = { version = "0.4", features = ["serde"] }
