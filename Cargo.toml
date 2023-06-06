@@ -14,7 +14,7 @@ num-traits = "0.2.15"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 sha3 = "0.10.1"
-starknet_api = { git = "https://github.com/lambdaclass/starknet-api", branch = "main", features = [
+starknet_api = { git = "https://github.com/lambdaclass/starknet-api", rev="267642ac021eeaae094da59d5889066d7dbbcedc", features = [
     "testing",
 ] }
 starknet-crypto = "0.2.0"
