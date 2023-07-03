@@ -1,4 +1,4 @@
-use felt::Felt252;
+use cairo_vm::felt::Felt252;
 use num_traits::ToPrimitive;
 use sha3::{Digest, Keccak256};
 
@@ -6,7 +6,7 @@ use crate::utils::Address;
 
 /// A StarkNet Message from L2 to L1.
 #[derive(Debug, Clone)]
-pub(crate) struct StarknetMessageToL1 {
+pub struct StarknetMessageToL1 {
     from_address: Address,
     to_address: Address,
     payload: Vec<Felt252>,

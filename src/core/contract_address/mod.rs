@@ -1,1 +1,5 @@
-pub mod starknet_contract_address;
+mod deprecated_contract_address;
+mod sierra_contract_address;
+
+pub use deprecated_contract_address::compute_deprecated_class_hash;
+pub use sierra_contract_address::compute_sierra_class_hash;

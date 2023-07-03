@@ -1,12 +1,12 @@
 use crate::{
-    business_logic::state::state_cache::StorageEntry,
     services::api::contract_class_errors::ContractClassError,
-    starknet_storage::errors::storage_errors::StorageError,
+    state::state_cache::StorageEntry,
+    storage::errors::storage_errors::StorageError,
     utils::{Address, ClassHash},
 };
 use thiserror::Error;
 
-#[derive(Debug, PartialEq, Eq, Error)]
+#[derive(Debug, Error)]
 pub enum StateError {
     #[error("Missing ContractClassCache")]
     MissingContractClassCache,
@@ -36,10 +36,24 @@ pub enum StateError {
     Storage(#[from] StorageError),
     #[error(transparent)]
     ContractClass(#[from] ContractClassError),
+    #[error("Missing CasmClassCache")]
+    MissingCasmClassCache,
     #[error("Constructor calldata is empty")]
     ConstructorCalldataEmpty(),
     #[error("Error in ExecutionEntryPoint")]
     ExecutionEntryPoint(),
+    #[error("No compiled class found for compiled_class_hash {0:?}")]
+    NoneCompiledClass(ClassHash),
+    #[error("No compiled class hash found for class_hash {0:?}")]
+    NoneCompiledHash(ClassHash),
+    #[error("Missing casm class for hash {0:?}")]
+    MissingCasmClass(ClassHash),
     #[error("No class hash declared in class_hash_to_contract_class")]
     MissingClassHash(),
+    #[error("Uninitializes class_hash")]
+    UninitiaizedClassHash,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{0:?}")]
+    CustomError(String),
 }

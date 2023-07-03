@@ -1,21 +1,19 @@
 #![deny(warnings)]
 
-use cairo_rs::vm::runners::cairo_runner::ExecutionResources;
-use felt::Felt252;
+mod cairo_1_syscalls;
+
+use cairo_vm::felt::Felt252;
+use cairo_vm::vm::runners::cairo_runner::ExecutionResources;
 use num_traits::Zero;
-use starknet_rs::{
-    business_logic::{
-        execution::{
-            execution_entry_point::ExecutionEntryPoint,
-            objects::{CallInfo, CallType, TransactionExecutionContext},
-        },
-        fact_state::{
-            in_memory_state_reader::InMemoryStateReader, state::ExecutionResourcesManager,
-        },
-        state::{cached_state::CachedState, state_cache::StorageEntry},
+use starknet_contract_class::EntryPointType;
+use starknet_in_rust::{
+    definitions::{block_context::BlockContext, constants::TRANSACTION_VERSION},
+    execution::{
+        execution_entry_point::ExecutionEntryPoint, CallInfo, CallType, TransactionExecutionContext,
     },
-    definitions::{constants::TRANSACTION_VERSION, general_config::StarknetGeneralConfig},
-    services::api::contract_class::{ContractClass, EntryPointType},
+    services::api::contract_classes::deprecated_contract_class::ContractClass,
+    state::{cached_state::CachedState, state_cache::StorageEntry},
+    state::{in_memory_state_reader::InMemoryStateReader, ExecutionResourcesManager},
     utils::{calculate_sn_keccak, Address},
 };
 use std::{
@@ -72,7 +70,7 @@ fn hello_starknet_increase_balance() {
     //*    Create state with previous data
     //* ---------------------------------------
 
-    let mut state = CachedState::new(state_reader, Some(contract_class_cache));
+    let mut state = CachedState::new(state_reader, Some(contract_class_cache), None);
 
     //* ------------------------------------
     //*    Create execution entry point
@@ -90,20 +88,21 @@ fn hello_starknet_increase_balance() {
         entry_point_type,
         Some(CallType::Delegate),
         Some(class_hash),
+        0,
     );
 
     //* --------------------
     //*   Execute contract
     //* ---------------------
-    let general_config = StarknetGeneralConfig::default();
-    let tx_execution_context = TransactionExecutionContext::new(
+    let block_context = BlockContext::default();
+    let mut tx_execution_context = TransactionExecutionContext::new(
         Address(0.into()),
         Felt252::zero(),
         Vec::new(),
         0,
         10.into(),
-        general_config.invoke_tx_max_n_steps(),
-        TRANSACTION_VERSION,
+        block_context.invoke_tx_max_n_steps(),
+        TRANSACTION_VERSION.clone(),
     );
     let mut resources_manager = ExecutionResourcesManager::default();
     let expected_key = calculate_sn_keccak("balance".as_bytes());
@@ -120,7 +119,10 @@ fn hello_starknet_increase_balance() {
         entry_point_type: Some(EntryPointType::External),
         calldata,
         retdata: [].to_vec(),
-        execution_resources: ExecutionResources::default(),
+        execution_resources: ExecutionResources {
+            n_steps: 65,
+            ..Default::default()
+        },
         class_hash: Some(class_hash),
         accessed_storage_keys: expected_accessed_storage_keys,
         storage_read_values: expected_storage_read_values,
@@ -131,9 +133,10 @@ fn hello_starknet_increase_balance() {
         exec_entry_point
             .execute(
                 &mut state,
-                &general_config,
+                &block_context,
                 &mut resources_manager,
-                &tx_execution_context
+                &mut tx_execution_context,
+                false,
             )
             .unwrap(),
         expected_call_info
