@@ -28,6 +28,7 @@ use cairo_vm::{
     },
     vm::{
         runners::cairo_runner::{CairoArg, CairoRunner, ExecutionResources, RunResources},
+        trace::trace_entry::TraceEntry,
         vm_core::VirtualMachine,
     },
 };
@@ -192,12 +193,23 @@ impl ExecutionEntryPoint {
         l2_to_l1_messages: Vec<OrderedL2ToL1Message>,
         internal_calls: Vec<CallInfo>,
         retdata: Vec<Felt252>,
+        trace: &Vec<TraceEntry>,
     ) -> Result<CallInfo, TransactionError>
     where
         S: State + StateReader,
     {
         let execution_resources = &resources_manager.cairo_usage - &previous_cairo_usage;
-
+        let mut vec_trace: Vec<(u32, u32)> = vec![];
+        for tr in trace {
+            vec_trace.push((
+                tr.pc
+                    .try_into()
+                    .expect("Failed to transform offset into u32"),
+                tr.fp
+                    .try_into()
+                    .expect("Failed to transform offset into u32"),
+            ));
+        }
         Ok(CallInfo {
             caller_address: self.caller_address.clone(),
             call_type: Some(self.call_type.clone()),
@@ -216,6 +228,7 @@ impl ExecutionEntryPoint {
             internal_calls,
             failure_flag: false,
             gas_consumed: 0,
+            trace: vec_trace,
         })
     }
 
@@ -228,12 +241,21 @@ impl ExecutionEntryPoint {
         l2_to_l1_messages: Vec<OrderedL2ToL1Message>,
         internal_calls: Vec<CallInfo>,
         call_result: CallResult,
+        trace: &Vec<TraceEntry>,
     ) -> Result<CallInfo, TransactionError>
     where
         S: State + StateReader,
     {
         let execution_resources = &resources_manager.cairo_usage - &previous_cairo_usage;
-
+        let mut vec_trace: Vec<(u32, u32)> = vec![];
+        for t in trace {
+            vec_trace.push((
+                t.pc.try_into()
+                    .expect("Failed to transform offset into u32"),
+                t.fp.try_into()
+                    .expect("Failed to transform offset into u32"),
+            ));
+        }
         Ok(CallInfo {
             caller_address: self.caller_address.clone(),
             call_type: Some(self.call_type.clone()),
@@ -256,6 +278,7 @@ impl ExecutionEntryPoint {
             internal_calls,
             failure_flag: !call_result.is_success,
             gas_consumed: call_result.gas_consumed,
+            trace: vec_trace,
         })
     }
 
@@ -380,7 +403,7 @@ impl ExecutionEntryPoint {
         resources_manager.cairo_usage += &runner.get_execution_resources()?;
 
         let retdata = runner.get_return_values()?;
-
+        let trace = runner.vm.get_trace();
         self.build_call_info_deprecated::<T>(
             previous_cairo_usage,
             resources_manager,
@@ -389,6 +412,7 @@ impl ExecutionEntryPoint {
             runner.hint_processor.syscall_handler.l2_to_l1_messages,
             runner.hint_processor.syscall_handler.internal_calls,
             retdata,
+            trace,
         )
     }
 
@@ -530,6 +554,7 @@ impl ExecutionEntryPoint {
         resources_manager.cairo_usage += &runner.get_execution_resources()?;
 
         let call_result = runner.get_call_result(self.initial_gas)?;
+        let trace = runner.vm.get_trace();
         self.build_call_info::<T>(
             previous_cairo_usage,
             resources_manager,
@@ -538,6 +563,7 @@ impl ExecutionEntryPoint {
             runner.hint_processor.syscall_handler.l2_to_l1_messages,
             runner.hint_processor.syscall_handler.internal_calls,
             call_result,
+            trace,
         )
     }
 }
