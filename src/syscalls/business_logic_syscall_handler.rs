@@ -247,6 +247,7 @@ impl<'a, T: State + StateReader> BusinessLogicSyscallHandler<'a, T> {
                 &mut self.resources_manager,
                 &mut self.tx_execution_context,
                 self.support_reverted,
+                false,
             )
             .map_err(|err| SyscallHandlerError::ExecutionError(err.to_string()))?;
 
@@ -348,6 +349,7 @@ impl<'a, T: State + StateReader> BusinessLogicSyscallHandler<'a, T> {
                 &mut self.resources_manager,
                 &mut self.tx_execution_context,
                 self.support_reverted,
+                false,
             )
             .map_err(|_| StateError::ExecutionEntryPoint())?;
 

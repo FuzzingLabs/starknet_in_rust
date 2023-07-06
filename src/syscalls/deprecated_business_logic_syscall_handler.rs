@@ -234,6 +234,7 @@ impl<'a, T: State + StateReader> DeprecatedBLSyscallHandler<'a, T> {
                 &mut self.resources_manager,
                 &mut self.tx_execution_context,
                 false,
+                false,
             )
             .map_err(|_| StateError::ExecutionEntryPoint())?;
         Ok(())
@@ -457,6 +458,7 @@ where
                 &self.block_context,
                 &mut self.resources_manager,
                 &mut self.tx_execution_context,
+                false,
                 false,
             )
             .map(|x| {

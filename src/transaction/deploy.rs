@@ -192,6 +192,7 @@ impl Deploy {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )?;
 
         let changes = state.count_actual_storage_changes();

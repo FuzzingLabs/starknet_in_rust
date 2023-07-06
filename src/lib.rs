@@ -132,6 +132,7 @@ pub fn call_contract<T: State + StateReader>(
         &mut ExecutionResourcesManager::default(),
         &mut tx_execution_context,
         false,
+        false,
     )?;
 
     Ok(call_info.retdata)

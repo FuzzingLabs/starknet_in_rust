@@ -272,6 +272,7 @@ impl DeployAccount {
                 resources_manager,
                 &mut self.get_execution_context(block_context.validate_max_n_steps),
                 false,
+                false,
             )?)
         };
 
@@ -330,6 +331,7 @@ impl DeployAccount {
                 block_context,
                 resources_manager,
                 &mut self.get_execution_context(block_context.validate_max_n_steps),
+                false,
                 false,
             )?)
         };

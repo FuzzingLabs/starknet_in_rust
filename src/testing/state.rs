@@ -154,6 +154,7 @@ impl StarknetState {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )?;
 
         let exec_info = ExecutionInfo::Call(Box::new(call_info.clone()));

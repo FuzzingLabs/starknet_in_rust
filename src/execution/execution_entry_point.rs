@@ -90,6 +90,7 @@ impl ExecutionEntryPoint {
         resources_manager: &mut ExecutionResourcesManager,
         tx_execution_context: &mut TransactionExecutionContext,
         support_reverted: bool,
+        enable_trace: bool,
     ) -> Result<CallInfo, TransactionError>
     where
         T: State + StateReader,
@@ -107,6 +108,7 @@ impl ExecutionEntryPoint {
                 tx_execution_context,
                 contract_class,
                 class_hash,
+                enable_trace,
             ),
             CompiledClass::Casm(contract_class) => self._execute(
                 state,
@@ -116,6 +118,7 @@ impl ExecutionEntryPoint {
                 contract_class,
                 class_hash,
                 support_reverted,
+                enable_trace,
             ),
         }
     }
@@ -315,6 +318,7 @@ impl ExecutionEntryPoint {
         tx_execution_context: &mut TransactionExecutionContext,
         contract_class: Box<ContractClass>,
         class_hash: [u8; 32],
+        enable_trace: bool,
     ) -> Result<CallInfo, TransactionError>
     where
         T: State + StateReader,
@@ -324,7 +328,7 @@ impl ExecutionEntryPoint {
         let entry_point = self.get_selected_entry_point_v0(&contract_class, class_hash)?;
 
         // create starknet runner
-        let mut vm = VirtualMachine::new(false);
+        let mut vm = VirtualMachine::new(enable_trace);
         let mut cairo_runner = CairoRunner::new(&contract_class.program, "all_cairo", false)?;
         cairo_runner.initialize_function_runner(&mut vm)?;
 
@@ -425,6 +429,7 @@ impl ExecutionEntryPoint {
         contract_class: Box<CasmContractClass>,
         class_hash: [u8; 32],
         support_reverted: bool,
+        enable_trace: bool,
     ) -> Result<CallInfo, TransactionError>
     where
         T: State + StateReader,
@@ -435,7 +440,7 @@ impl ExecutionEntryPoint {
         let entry_point = self.get_selected_entry_point(&contract_class, class_hash)?;
 
         // create starknet runner
-        let mut vm = VirtualMachine::new(false);
+        let mut vm = VirtualMachine::new(enable_trace);
         // get a program from the casm contract class
         let program: Program = contract_class.as_ref().clone().try_into()?;
         // create and initialize a cairo runner for running cairo 1 programs.

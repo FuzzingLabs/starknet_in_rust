@@ -293,6 +293,7 @@ impl DeclareV2 {
                 resources_manager,
                 &mut tx_execution_context,
                 false,
+                false,
             )?)
         };
         let call_info = verify_no_calls_to_other_contracts(&call_info)?;
