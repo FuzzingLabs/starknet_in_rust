@@ -120,6 +120,7 @@ fn delegate_call() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false
         )
         .is_ok());
 }

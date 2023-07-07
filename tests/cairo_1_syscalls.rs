@@ -105,6 +105,7 @@ fn storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
 
@@ -124,6 +125,7 @@ fn storage_write_read() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -146,6 +148,7 @@ fn storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
 
@@ -165,6 +168,7 @@ fn storage_write_read() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -318,6 +322,7 @@ fn library_call() {
                 &mut resources_manager,
                 &mut tx_execution_context,
                 false,
+                false
             )
             .unwrap(),
         expected_call_info
@@ -436,6 +441,7 @@ fn call_contract_storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
 
@@ -457,6 +463,7 @@ fn call_contract_storage_write_read() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -481,6 +488,7 @@ fn call_contract_storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
 
@@ -502,6 +510,7 @@ fn call_contract_storage_write_read() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -572,6 +581,7 @@ fn emit_event() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -689,6 +699,7 @@ fn deploy_cairo1_from_cairo1() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
+        false,
     );
 
     assert!(call_info.is_ok());
@@ -791,6 +802,7 @@ fn deploy_cairo0_from_cairo1_without_constructor() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
+        false,
     );
 
     assert!(call_info.is_ok());
@@ -891,6 +903,7 @@ fn deploy_cairo0_from_cairo1_with_constructor() {
         &block_context,
         &mut resources_manager,
         &mut tx_execution_context,
+        false,
         false,
     );
 
@@ -994,6 +1007,7 @@ fn deploy_cairo0_and_invoke() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
+        false,
     );
 
     assert!(call_info.is_ok());
@@ -1033,6 +1047,7 @@ fn deploy_cairo0_and_invoke() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -1118,6 +1133,7 @@ fn test_send_message_to_l1_syscall() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -1224,6 +1240,7 @@ fn test_get_execution_info() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -1335,6 +1352,7 @@ fn replace_class_internal() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -1457,6 +1475,7 @@ fn replace_class_contract_call() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
     assert_eq!(result.retdata, vec![25.into()]);
@@ -1483,6 +1502,7 @@ fn replace_class_contract_call() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
 
@@ -1507,6 +1527,7 @@ fn replace_class_contract_call() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -1619,6 +1640,7 @@ fn replace_class_contract_call_same_transaction() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -1736,6 +1758,7 @@ fn call_contract_upgrade_cairo_0_to_cairo_1_same_transaction() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
     assert_eq!(result.retdata, vec![33.into(), 17.into()]);
@@ -1850,6 +1873,7 @@ fn call_contract_downgrade_cairo_1_to_cairo_0_same_transaction() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
     assert_eq!(result.retdata, vec![17.into(), 33.into()]);
@@ -1961,6 +1985,7 @@ fn call_contract_replace_class_cairo_0() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
     assert_eq!(result.retdata, vec![64.into(), 33.into()]);
@@ -2031,6 +2056,7 @@ fn test_out_of_gas_failure() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -2105,6 +2131,7 @@ fn deploy_syscall_failure_uninitialized_class_hash() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -2189,6 +2216,7 @@ fn deploy_syscall_failure_in_constructor() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -2278,6 +2306,7 @@ fn storage_read_no_value() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
     // As the value doesn't exist in storage, it's value will be 0
@@ -2361,6 +2390,7 @@ fn storage_read_unavailable_address_domain() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -2448,6 +2478,7 @@ fn storage_write_unavailable_address_domain() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -2549,6 +2580,7 @@ fn library_call_failure() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
     assert_eq!(
@@ -2648,6 +2680,7 @@ fn send_messages_to_l1_different_contract_calls() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -2766,6 +2799,7 @@ fn send_messages_to_l1_different_contract_calls_cairo1_to_cairo0() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
     let l1_to_l2_messages = call_info.get_sorted_l2_to_l1_messages().unwrap();
@@ -2880,6 +2914,7 @@ fn send_messages_to_l1_different_contract_calls_cairo0_to_cairo1() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();

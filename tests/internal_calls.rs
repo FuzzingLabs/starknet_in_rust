@@ -72,6 +72,7 @@ fn test_internal_calls() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .expect("Could not execute contract");
 

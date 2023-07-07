@@ -122,6 +122,7 @@ fn test_contract<'a>(
         &mut resources_manager,
         &mut tx_execution_context,
         false,
+        false,
     );
 
     assert_matches!(result, Err(e) if e.to_string().contains(error_msg));

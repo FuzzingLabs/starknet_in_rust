@@ -309,6 +309,7 @@ mod test {
                 internal_calls: vec![],
                 gas_consumed: 0,
                 failure_flag: false,
+                trace: vec![],
             }),
             fee_transfer_info: None,
             actual_fee: 0,

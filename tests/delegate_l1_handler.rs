@@ -114,6 +114,7 @@ fn delegate_l1_handler() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false
         )
         .is_ok());
 }

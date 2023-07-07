@@ -255,6 +255,7 @@ fn call_parser(
         &mut ExecutionResourcesManager::default(),
         &mut TransactionExecutionContext::default(),
         false,
+        false,
     )?;
     Ok(call_info.retdata)
 }

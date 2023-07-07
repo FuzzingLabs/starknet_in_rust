@@ -49,6 +49,7 @@ use starknet_in_rust::{
     },
     utils::{calculate_sn_keccak, felt_to_hash, Address, ClassHash},
 };
+use std::vec;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -616,6 +617,7 @@ fn expected_fee_transfer_info() -> CallInfo {
                 119, 136, 76, 21, 186, 42, 176, 242, 36, 27, 8, 13, 235,
             ],
         ]),
+        trace: vec![],
     }
 }
 
@@ -676,6 +678,7 @@ fn expected_fib_fee_transfer_info() -> CallInfo {
                 119, 136, 76, 21, 186, 42, 176, 242, 36, 27, 8, 13, 236,
             ],
         ]),
+        trace: vec![],
     }
 }
 
@@ -1804,6 +1807,7 @@ fn test_library_call_with_declare_v2() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();

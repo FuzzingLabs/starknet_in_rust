@@ -143,6 +143,7 @@ fn test_contract<'a>(
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .expect("Could not execute contract");
 
@@ -1140,6 +1141,7 @@ fn deploy_cairo1_from_cairo0_with_constructor() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
+        false,
     );
 
     assert!(call_info.is_ok());
@@ -1241,6 +1243,7 @@ fn deploy_cairo1_from_cairo0_without_constructor() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();
@@ -1382,6 +1385,7 @@ fn deploy_cairo1_and_invoke() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
+            false,
         )
         .unwrap();
 
@@ -1471,6 +1475,7 @@ fn send_messages_to_l1_different_contract_calls() {
             &block_context,
             &mut resources_manager,
             &mut tx_execution_context,
+            false,
             false,
         )
         .unwrap();

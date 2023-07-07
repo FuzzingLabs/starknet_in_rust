@@ -132,6 +132,7 @@ fn integration_storage_test() {
                 &mut resources_manager,
                 &mut tx_execution_context,
                 false,
+                false
             )
             .unwrap(),
         expected_call_info
