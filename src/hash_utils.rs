@@ -1,12 +1,12 @@
-use crate::{core::errors::syscall_handler_errors::SyscallHandlerError, utils::Address};
-use felt::Felt252;
+use crate::{syscalls::syscall_handler_errors::SyscallHandlerError, utils::Address};
+use cairo_vm::felt::Felt252;
 use num_integer::Integer;
 use num_traits::Pow;
 use starknet_crypto::{pedersen_hash, FieldElement};
 use std::vec;
 
 pub fn calculate_contract_address(
-    salt: &Address,
+    salt: &Felt252,
     class_hash: &Felt252,
     constructor_calldata: &[Felt252],
     deployer_address: Address,
@@ -19,7 +19,7 @@ pub fn calculate_contract_address(
     let raw_address_vec = vec![
         contract_address_prefix,
         deployer_address.0,
-        salt.0.to_owned(),
+        salt.to_owned(),
         class_hash.to_owned(),
         constructor_calldata_hash,
     ];
@@ -52,7 +52,8 @@ pub(crate) fn compute_hash_on_elements(vec: &[Felt252]) -> Result<Felt252, Sysca
 #[cfg(test)]
 mod tests {
     use super::*;
-    use felt::felt_str;
+    use cairo_vm::felt::felt_str;
+    use coverage_helper::test;
 
     #[test]
     fn test_compute_hash_on_elements() {
@@ -96,7 +97,7 @@ mod tests {
     #[test]
     fn test_calculate_contract_address_from_hash() {
         let result_1 = calculate_contract_address(
-            &Address(1.into()),
+            &1.into(),
             &2.into(),
             &[3.into(), 4.into()],
             Address(5.into()),
@@ -110,7 +111,7 @@ mod tests {
         );
 
         let result_2 = calculate_contract_address(
-            &Address(756.into()),
+            &756.into(),
             &543.into(),
             &[124543.into(), 5345345.into(), 89.into()],
             Address(87123.into()),
@@ -118,7 +119,7 @@ mod tests {
 
         assert_matches!(
             result_2,
-            Ok(x) if x ==felt_str!(
+            Ok(x) if x == felt_str!(
                 "2864535578326518086698404810362457605993575745991923092043914398137702365865"
             )
         );

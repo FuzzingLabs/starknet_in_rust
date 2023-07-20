@@ -1,4 +1,4 @@
-use cairo_rs::{
+use cairo_vm::{
     types::errors::program_errors::ProgramError,
     vm::errors::{
         cairo_run_errors::CairoRunError, memory_errors::MemoryError, runner_errors::RunnerError,
@@ -6,6 +6,8 @@ use cairo_rs::{
     },
 };
 use thiserror::Error;
+
+use crate::syscalls::syscall_handler_errors::SyscallHandlerError;
 
 #[derive(Debug, Error)]
 pub enum ContractAddressError {
@@ -23,10 +25,22 @@ pub enum ContractAddressError {
     Memory(#[from] MemoryError),
     #[error("Index out of range")]
     IndexOutOfRange,
+    #[error("Missing abi in sierra contract class")]
+    MissingAbi,
     #[error(transparent)]
     CairoRunner(#[from] RunnerError),
     #[error(transparent)]
     CairoRun(#[from] CairoRunError),
     #[error(transparent)]
     VirtualMachine(#[from] VirtualMachineError),
+    #[error("Could not remove suffix from builtin")]
+    BuiltinSuffix,
+    #[error(transparent)]
+    SyscallHandler(#[from] SyscallHandlerError),
+    #[error("Failed to cast {0} into {1}")]
+    Cast(String, String),
+    #[error("MaybeRelocatable is not an Int variant")]
+    NoneIntMaybeRelocatable,
+    #[error("Invalid program JSON, message: {0}")]
+    InvalidProgramJson(String),
 }

@@ -1,35 +1,49 @@
 [package]
-name = "starknet-rs"
+name = "starknet_in_rust"
 version = "0.1.0"
 edition = "2021"
+description = "A Rust implementation of Starknet execution logic"
+license = "Apache-2.0"
+
+[features]
+default = ["with_mimalloc"]
+with_mimalloc = ["mimalloc"]
+cairo_1_tests = []
+
+[workspace]
+members = ["crates/starknet-contract-class", "cli", "fuzzer"]
+
+[workspace.dependencies]
+cairo-vm = { git="https://github.com/FuzzingLabs/cairo-rs",rev="ebf64a45b0881cde11c114236a666a8edd9af10a", features = ["cairo-1-hints"]}
+starknet_api = "0.1.0"
+num-traits = "0.2.15"
 
 [dependencies]
-cairo-rs = { git="https://github.com/FuzzingLabs/cairo-rs/", package = "cairo-vm", rev="80a032a203788b00ebe3f1655bd16396e547ef17"}
-felt = { git="https://github.com/FuzzingLabs/cairo-rs/", package = "cairo-felt", rev="80a032a203788b00ebe3f1655bd16396e547ef17"}
+cairo-lang-starknet = "2.0.0-rc6"
+cairo-lang-casm = "2.0.0-rc6"
+cairo-vm = { workspace=true, features = ["cairo-1-hints"]}
 getset = "0.1.2"
 lazy_static = "1.4.0"
 num-bigint = { version = "0.4", features = ["serde"] }
 num-integer = "0.1.45"
-num-traits = "0.2.15"
+num-traits = { workspace = true }
 serde = { version = "1.0.152", features = ["derive"] }
-serde_json = { version = "1.0", features = ["arbitrary_precision"] }
+serde_json = { version = "1.0", features = ["arbitrary_precision", "raw_value"] }
 sha3 = "0.10.1"
-starknet_api = { git = "https://github.com/lambdaclass/starknet-api", rev="267642ac021eeaae094da59d5889066d7dbbcedc", features = [
-    "testing",
-] }
-starknet-crypto = "0.2.0"
-thiserror = { version = "1.0.32" }
-clap = { version = "4.1.8", features = ["derive"] }
-actix-web = "4.3.1"
+starknet_api = { workspace = true }
+starknet-crypto = "0.5.1"
+thiserror = "1.0.32"
 awc = "3.1.1"
+mimalloc = { version = "0.1.29", default-features = false, optional = true }
 hex = "0.4.3"
+cargo-llvm-cov = "0.5.14"
+anyhow = "1.0.66"
+starknet-contract-class = { path = "./crates/starknet-contract-class", version = "0.1.0" }
+once_cell = "1.17.1"
 
 [dev-dependencies]
 assert_matches = "1.5.0"
-rusty-hook = "0.11"
-
-[workspace]
-members = ["crates/starknet-rs-py"]
+coverage-helper = "0.1.0"
 
 [[bench]]
 path = "bench/internals.rs"

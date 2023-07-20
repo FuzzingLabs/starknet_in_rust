@@ -1,27 +1,27 @@
 #![deny(warnings)]
 
-use felt::Felt252;
+use cairo_vm::felt::Felt252;
 use num_traits::Zero;
+use starknet_contract_class::{ContractEntryPoint, EntryPointType};
 use starknet_crypto::{pedersen_hash, FieldElement};
-use starknet_rs::{
-    business_logic::{
-        execution::{
-            execution_entry_point::ExecutionEntryPoint,
-            objects::{CallInfo, CallType, TransactionExecutionContext},
-        },
-        fact_state::{
-            in_memory_state_reader::InMemoryStateReader, state::ExecutionResourcesManager,
-        },
-        state::{cached_state::CachedState, state_api::State},
-        transaction::{error::TransactionError, objects::internal_deploy::InternalDeploy},
+use starknet_in_rust::{
+    definitions::{
+        block_context::{BlockContext, StarknetChainId},
+        constants::TRANSACTION_VERSION,
     },
-    definitions::{constants::TRANSACTION_VERSION, general_config::StarknetGeneralConfig},
-    services::api::contract_class::{ContractClass, EntryPointType},
+    execution::{
+        execution_entry_point::ExecutionEntryPoint, CallInfo, CallType, TransactionExecutionContext,
+    },
+    services::api::contract_classes::deprecated_contract_class::ContractClass,
+    state::{cached_state::CachedState, state_api::State},
+    state::{in_memory_state_reader::InMemoryStateReader, ExecutionResourcesManager},
+    transaction::{error::TransactionError, Deploy},
     utils::{calculate_sn_keccak, Address},
 };
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    fs::File,
+    io::BufReader,
 };
 
 pub struct CallConfig<'a> {
@@ -29,12 +29,9 @@ pub struct CallConfig<'a> {
     pub caller_address: &'a Address,
     pub address: &'a Address,
     pub class_hash: &'a [u8; 32],
-    pub entry_points_by_type: &'a HashMap<
-        EntryPointType,
-        Vec<starknet_rs::services::api::contract_class::ContractEntryPoint>,
-    >,
+    pub entry_points_by_type: &'a HashMap<EntryPointType, Vec<ContractEntryPoint>>,
     pub entry_point_type: &'a EntryPointType,
-    pub general_config: &'a StarknetGeneralConfig,
+    pub block_context: &'a BlockContext,
     pub resources_manager: &'a mut ExecutionResourcesManager,
 }
 
@@ -90,6 +87,7 @@ pub fn get_entry_points(
             *entry_point_type,
             Some(CallType::Delegate),
             Some(*class_hash),
+            300000,
         ),
         entrypoint_selector,
     )
@@ -113,21 +111,22 @@ pub fn execute_entry_point(
     //* --------------------
     //*   Execute contract
     //* ---------------------
-    let tx_execution_context = TransactionExecutionContext::new(
+    let mut tx_execution_context = TransactionExecutionContext::new(
         Address(0.into()),
         Felt252::zero(),
         Vec::new(),
         0,
         10.into(),
-        call_config.general_config.invoke_tx_max_n_steps(),
-        TRANSACTION_VERSION,
+        call_config.block_context.invoke_tx_max_n_steps(),
+        TRANSACTION_VERSION.clone(),
     );
 
     exec_entry_point.execute(
         call_config.state,
-        call_config.general_config,
+        call_config.block_context,
         call_config.resources_manager,
-        &tx_execution_context,
+        &mut tx_execution_context,
+        false,
     )
 }
 
@@ -135,22 +134,24 @@ pub fn deploy(
     state: &mut CachedState<InMemoryStateReader>,
     path: &str,
     calldata: &[Felt252],
-    config: &StarknetGeneralConfig,
+    block_context: &BlockContext,
+    hash_value: Option<Felt252>,
 ) -> Result<(Address, [u8; 32]), TransactionError> {
-    let path = PathBuf::from(path);
-    let contract_class = ContractClass::try_from(path).unwrap();
+    let contract_reader = BufReader::new(File::open(path).unwrap());
+    let contract_class = ContractClass::try_from(contract_reader).unwrap();
 
-    let internal_deploy = InternalDeploy::new(
-        Address(0.into()),
+    let internal_deploy = Deploy::new(
+        0.into(),
         contract_class.clone(),
         calldata.to_vec(),
+        StarknetChainId::TestNet.to_felt(),
         0.into(),
-        0,
+        hash_value,
     )?;
     let class_hash = internal_deploy.class_hash();
     state.set_contract_class(&class_hash, &contract_class)?;
 
-    let tx_execution_info = internal_deploy.apply(state, config)?;
+    let tx_execution_info = internal_deploy.apply(state, block_context)?;
 
     let call_info = tx_execution_info.call_info.unwrap();
     let contract_address = call_info.contract_address;

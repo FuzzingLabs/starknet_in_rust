@@ -1,25 +1,23 @@
 use crate::{
-    business_logic::{
-        execution::{
-            gas_usage::calculate_tx_gas_usage, objects::CallInfo,
-            os_usage::get_additional_os_resources,
-        },
-        fact_state::state::ExecutionResourcesManager,
-        state::{
-            cached_state::UNINITIALIZED_CLASS_HASH, state_api::StateReader,
-            state_cache::StorageEntry,
-        },
-        transaction::error::TransactionError,
-    },
-    core::errors::syscall_handler_errors::SyscallHandlerError,
     definitions::transaction_type::TransactionType,
-    services::api::contract_class::EntryPointType,
+    execution::{
+        gas_usage::calculate_tx_gas_usage, os_usage::get_additional_os_resources, CallInfo,
+    },
+    state::ExecutionResourcesManager,
+    state::{
+        cached_state::UNINITIALIZED_CLASS_HASH, state_api::StateReader, state_cache::StorageEntry,
+    },
+    syscalls::syscall_handler_errors::SyscallHandlerError,
+    transaction::error::TransactionError,
 };
-use cairo_rs::{types::relocatable::Relocatable, vm::vm_core::VirtualMachine};
-use felt::Felt252;
+use cairo_vm::{
+    felt::Felt252, serde::deserialize_program::BuiltinName, vm::runners::builtin_runner,
+};
+use cairo_vm::{types::relocatable::Relocatable, vm::vm_core::VirtualMachine};
 use num_traits::{Num, ToPrimitive};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
+use starknet_contract_class::EntryPointType;
 use starknet_crypto::FieldElement;
 use std::{
     collections::{HashMap, HashSet},
@@ -27,6 +25,7 @@ use std::{
 };
 
 pub type ClassHash = [u8; 32];
+pub type CompiledClassHash = [u8; 32];
 
 //* -------------------
 //*      Address
@@ -46,7 +45,10 @@ pub fn get_integer(
     vm.get_integer(syscall_ptr)?
         .as_ref()
         .to_usize()
-        .ok_or(SyscallHandlerError::FeltToUsizeFail)
+        .ok_or(SyscallHandlerError::Conversion(
+            "Felt252".to_string(),
+            "usize".to_string(),
+        ))
 }
 
 pub fn get_big_int(
@@ -73,6 +75,23 @@ pub fn get_integer_range(
         .into_iter()
         .map(|c| c.into_owned())
         .collect::<Vec<Felt252>>())
+}
+
+pub fn get_felt_range(
+    vm: &VirtualMachine,
+    start_addr: Relocatable,
+    end_addr: Relocatable,
+) -> Result<Vec<Felt252>, SyscallHandlerError> {
+    if start_addr.segment_index != end_addr.segment_index {
+        return Err(SyscallHandlerError::InconsistentSegmentIndices);
+    }
+
+    if start_addr.offset > end_addr.offset {
+        return Err(SyscallHandlerError::StartOffsetGreaterThanEndOffset);
+    }
+
+    let size = end_addr.offset - start_addr.offset;
+    get_integer_range(vm, start_addr, size)
 }
 
 pub fn felt_to_field_element(value: &Felt252) -> Result<FieldElement, SyscallHandlerError> {
@@ -110,16 +129,18 @@ pub fn string_to_hash(class_string: &String) -> ClassHash {
 // -------------------
 
 /// Converts CachedState storage mapping to StateDiff storage mapping.
-/// See to_cached_state_storage_mapping documentation.
-
 pub fn to_state_diff_storage_mapping(
     storage_writes: HashMap<StorageEntry, Felt252>,
-) -> HashMap<Felt252, HashMap<ClassHash, Address>> {
-    let mut storage_updates: HashMap<Felt252, HashMap<ClassHash, Address>> = HashMap::new();
-    for ((address, key), value) in storage_writes {
-        let mut map = storage_updates.get(&address.0).cloned().unwrap_or_default();
-        map.insert(key, Address(value));
-        storage_updates.insert(address.0, map);
+) -> HashMap<Address, HashMap<Felt252, Felt252>> {
+    let mut storage_updates: HashMap<Address, HashMap<Felt252, Felt252>> = HashMap::new();
+    for ((address, key), value) in storage_writes.into_iter() {
+        storage_updates
+            .entry(address)
+            .and_modify(|updates_for_address: &mut HashMap<Felt252, Felt252>| {
+                let key_fe = Felt252::from_bytes_be(&key);
+                updates_for_address.insert(key_fe, value.clone());
+            })
+            .or_insert_with(|| HashMap::from([(Felt252::from_bytes_be(&key), value)]));
     }
     storage_updates
 }
@@ -208,14 +229,13 @@ where
 
 /// Converts StateDiff storage mapping (addresses map to a key-value mapping) to CachedState
 /// storage mapping (Tuple of address and key map to the associated value).
-
 pub fn to_cache_state_storage_mapping(
-    map: HashMap<Felt252, HashMap<ClassHash, Address>>,
+    map: &HashMap<Address, HashMap<Felt252, Felt252>>,
 ) -> HashMap<StorageEntry, Felt252> {
     let mut storage_writes = HashMap::new();
     for (address, contract_storage) in map {
         for (key, value) in contract_storage {
-            storage_writes.insert((Address(address.clone()), key), value.0);
+            storage_writes.insert((address.clone(), felt_to_hash(key)), value.clone());
         }
     }
     storage_writes
@@ -285,6 +305,31 @@ pub fn calculate_sn_keccak(data: &[u8]) -> ClassHash {
     result
 }
 
+//* ------------------------
+//*      Other utils
+//* ------------------------
+
+pub(crate) fn parse_builtin_names(
+    builtin_strings: &[String],
+) -> Result<Vec<BuiltinName>, TransactionError> {
+    builtin_strings
+        .iter()
+        .map(|n| format!("{n}_builtin"))
+        .map(|s| match &*s {
+            builtin_runner::OUTPUT_BUILTIN_NAME => Ok(BuiltinName::output),
+            builtin_runner::RANGE_CHECK_BUILTIN_NAME => Ok(BuiltinName::range_check),
+            builtin_runner::HASH_BUILTIN_NAME => Ok(BuiltinName::pedersen),
+            builtin_runner::SIGNATURE_BUILTIN_NAME => Ok(BuiltinName::ecdsa),
+            builtin_runner::KECCAK_BUILTIN_NAME => Ok(BuiltinName::keccak),
+            builtin_runner::BITWISE_BUILTIN_NAME => Ok(BuiltinName::bitwise),
+            builtin_runner::EC_OP_BUILTIN_NAME => Ok(BuiltinName::ec_op),
+            builtin_runner::POSEIDON_BUILTIN_NAME => Ok(BuiltinName::poseidon),
+            builtin_runner::SEGMENT_ARENA_BUILTIN_NAME => Ok(BuiltinName::segment_arena),
+            s => Err(TransactionError::InvalidBuiltinContractClass(s.to_string())),
+        })
+        .collect()
+}
+
 //* -------------------
 //*      Macros
 //* -------------------
@@ -306,12 +351,12 @@ pub mod test_utils {
         ($num: expr) => {{
             let mut references = HashMap::<
                 usize,
-                cairo_rs::hint_processor::hint_processor_definition::HintReference,
+                cairo_vm::hint_processor::hint_processor_definition::HintReference,
             >::new();
             for i in 0..$num {
                 references.insert(
                     i as usize,
-                    cairo_rs::hint_processor::hint_processor_definition::HintReference::new_simple(
+                    cairo_vm::hint_processor::hint_processor_definition::HintReference::new_simple(
                         (i as i32),
                     ),
                 );
@@ -326,7 +371,7 @@ pub mod test_utils {
             {
                 let ids_names = vec![$( $name ),*];
                 let references = $crate::utils::test_utils::references!(ids_names.len() as i32);
-                let mut ids_data = HashMap::<String, cairo_rs::hint_processor::hint_processor_definition::HintReference>::new();
+                let mut ids_data = HashMap::<String, cairo_vm::hint_processor::hint_processor_definition::HintReference>::new();
                 for (i, name) in ids_names.iter().enumerate() {
                     ids_data.insert(name.to_string(), references.get(&i).unwrap().clone());
                 }
@@ -373,7 +418,7 @@ pub mod test_utils {
             $vm.insert_value(k, &v).unwrap();
         };
         ($vm: expr, $si:expr, $off:expr, $val:expr) => {
-            let v: felt::Felt252 = $val.into();
+            let v: cairo_vm::felt::Felt252 = $val.into();
             let k = $crate::relocatable_value!($si, $off);
             $vm.insert_value(k, v).unwrap();
         };
@@ -383,7 +428,7 @@ pub mod test_utils {
     #[macro_export]
     macro_rules! allocate_selector {
         ($vm: expr, (($si:expr, $off:expr), $val:expr)) => {
-            let v = felt::Felt252::from_bytes_be($val);
+            let v = cairo_vm::felt::Felt252::from_bytes_be($val);
             let k = $crate::relocatable_value!($si, $off);
             $vm.insert_value(k, v).unwrap();
         };
@@ -460,12 +505,12 @@ pub mod test_utils {
             let hint_data = HintProcessorData::new_default($hint_code.to_string(), $ids_data);
             let mut state = CachedState::<InMemoryStateReader>::default();
             let mut hint_processor = $crate::core::syscalls::syscall_handler::SyscallHintProcessor::<
-                $crate::core::syscalls::business_logic_syscall_handler::BusinessLogicSyscallHandler::<
-                    $crate::business_logic::state::cached_state::CachedState<
-                        $crate::business_logic::fact_state::in_memory_state_reader::InMemoryStateReader,
+                $crate::core::syscalls::business_logic_syscall_handler::DeprecatedBLSyscallHandler::<
+                    $crate::state::cached_state::CachedState<
+                        $crate::state::in_memory_state_reader::InMemoryStateReader,
                     >,
                 >,
-            >::new(BusinessLogicSyscallHandler::default_with(&mut state));
+            >::new(DeprecatedBLSyscallHandler::default_with(&mut state));
             hint_processor.execute_hint(
                 &mut $vm,
                 exec_scopes_ref!(),
@@ -480,13 +525,13 @@ pub mod test_utils {
 #[cfg(test)]
 mod test {
     use super::*;
-    use felt::{felt_str, Felt252};
+    use cairo_vm::felt::{felt_str, Felt252};
     use num_traits::{One, Zero};
     use std::collections::HashMap;
 
     #[test]
     fn to_state_diff_storage_mapping_test() {
-        let mut storage: HashMap<(Address, ClassHash), Felt252> = HashMap::new();
+        let mut storage: HashMap<(Address, [u8; 32]), Felt252> = HashMap::new();
         let address1: Address = Address(1.into());
         let key1 = [0; 32];
         let value1: Felt252 = 2.into();
@@ -501,14 +546,10 @@ mod test {
 
         let map = to_state_diff_storage_mapping(storage);
 
-        assert_eq!(
-            *map.get(&address1.0).unwrap().get(&key1).unwrap(),
-            Address(value1)
-        );
-        assert_eq!(
-            *map.get(&address2.0).unwrap().get(&key2).unwrap(),
-            Address(value2)
-        );
+        let key1_fe = Felt252::from_bytes_be(key1.as_slice());
+        let key2_fe = Felt252::from_bytes_be(key2.as_slice());
+        assert_eq!(*map.get(&address1).unwrap().get(&key1_fe).unwrap(), value1);
+        assert_eq!(*map.get(&address2).unwrap().get(&key2_fe).unwrap(), value2);
     }
 
     #[test]
@@ -577,7 +618,7 @@ mod test {
         storage.insert((address2.clone(), key2), value2.clone());
 
         let state_dff = to_state_diff_storage_mapping(storage);
-        let cache_storage = to_cache_state_storage_mapping(state_dff);
+        let cache_storage = to_cache_state_storage_mapping(&state_dff);
 
         let mut expected_res = HashMap::new();
 
