@@ -14,14 +14,14 @@ cairo_1_tests = []
 members = ["crates/starknet-contract-class", "cli", "fuzzer"]
 
 [workspace.dependencies]
-cairo-vm = { git="https://github.com/FuzzingLabs/cairo-rs",rev="ebf64a45b0881cde11c114236a666a8edd9af10a", features = ["cairo-1-hints"]}
+cairo-vm = { git="https://github.com/FuzzingLabs/cairo-rs",rev="48af153240392992f18a09e969bae6518eec9639", features = ["cairo-1-hints"]}
 starknet_api = "0.1.0"
 num-traits = "0.2.15"
 
 [dependencies]
 cairo-lang-starknet = "2.0.0-rc6"
 cairo-lang-casm = "2.0.0-rc6"
-cairo-vm = { workspace=true, features = ["cairo-1-hints"]}
+cairo-vm = { git="https://github.com/FuzzingLabs/cairo-rs",rev="48af153240392992f18a09e969bae6518eec9639", features = ["cairo-1-hints"]}
 getset = "0.1.2"
 lazy_static = "1.4.0"
 num-bigint = { version = "0.4", features = ["serde"] }
