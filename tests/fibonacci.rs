@@ -5,8 +5,8 @@ use cairo_lang_starknet::casm_contract_class::CasmContractClass;
 use cairo_vm::vm::runners::cairo_runner::ExecutionResources;
 use cairo_vm::{felt::Felt252, vm::runners::builtin_runner::RANGE_CHECK_BUILTIN_NAME};
 use num_traits::Zero;
-use starknet_contract_class::EntryPointType;
 use starknet_in_rust::definitions::block_context::BlockContext;
+use starknet_in_rust::EntryPointType;
 use starknet_in_rust::{
     definitions::constants::TRANSACTION_VERSION,
     execution::{
@@ -17,6 +17,7 @@ use starknet_in_rust::{
     state::{in_memory_state_reader::InMemoryStateReader, ExecutionResourcesManager},
     utils::{Address, ClassHash},
 };
+use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf};
 
 #[test]
@@ -26,7 +27,7 @@ fn integration_test() {
     // ---------------------------------------------------------
 
     let path = PathBuf::from("starknet_programs/fibonacci.json");
-    let contract_class = ContractClass::try_from(path).unwrap();
+    let contract_class = ContractClass::from_path(path).unwrap();
     let entry_points_by_type = contract_class.entry_points_by_type().clone();
 
     let fib_entrypoint_selector = entry_points_by_type
@@ -62,7 +63,7 @@ fn integration_test() {
     //*    Create state with previous data
     //* ---------------------------------------
 
-    let mut state = CachedState::new(state_reader, Some(contract_class_cache), None);
+    let mut state = CachedState::new(Arc::new(state_reader), Some(contract_class_cache), None);
 
     //* ------------------------------------
     //*    Create execution entry point
@@ -122,8 +123,10 @@ fn integration_test() {
                 &mut resources_manager,
                 &mut tx_execution_context,
                 false,
-                false
+                block_context.invoke_tx_max_n_steps(),
             )
+            .unwrap()
+            .call_info
             .unwrap(),
         expected_call_info
     );
@@ -158,7 +161,7 @@ fn integration_test_cairo1() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [0.into(), 1.into(), 12.into()].to_vec();
@@ -200,7 +203,7 @@ fn integration_test_cairo1() {
         retdata: [144.into()].to_vec(),
         execution_resources: ExecutionResources {
             n_steps: 418,
-            n_memory_holes: 1,
+            n_memory_holes: 0,
             builtin_instance_counter: HashMap::from([(RANGE_CHECK_BUILTIN_NAME.to_string(), 15)]),
         },
         class_hash: Some(class_hash),
@@ -216,8 +219,10 @@ fn integration_test_cairo1() {
                 &mut resources_manager,
                 &mut tx_execution_context,
                 false,
-                false
+                block_context.invoke_tx_max_n_steps(),
             )
+            .unwrap()
+            .call_info
             .unwrap(),
         expected_call_info
     );

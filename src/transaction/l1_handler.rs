@@ -1,7 +1,11 @@
+use crate::{
+    execution::execution_entry_point::ExecutionResult,
+    services::api::contract_classes::deprecated_contract_class::EntryPointType,
+    state::cached_state::CachedState,
+};
 use cairo_vm::felt::Felt252;
 use getset::Getters;
 use num_traits::Zero;
-use starknet_contract_class::EntryPointType;
 
 use crate::{
     core::transaction_hash::{calculate_transaction_hash_common, TransactionHashPrefix},
@@ -58,8 +62,26 @@ impl L1Handler {
             &[nonce.clone()],
         )?;
 
-        Ok(L1Handler {
+        L1Handler::new_with_tx_hash(
+            contract_address,
+            entry_point_selector,
+            calldata,
+            nonce,
+            paid_fee_on_l1,
             hash_value,
+        )
+    }
+
+    pub fn new_with_tx_hash(
+        contract_address: Address,
+        entry_point_selector: Felt252,
+        calldata: Vec<Felt252>,
+        nonce: Felt252,
+        paid_fee_on_l1: Option<Felt252>,
+        tx_hash: Felt252,
+    ) -> Result<L1Handler, TransactionError> {
+        Ok(L1Handler {
+            hash_value: tx_hash,
             contract_address,
             entry_point_selector,
             calldata,
@@ -71,15 +93,12 @@ impl L1Handler {
     }
 
     /// Applies self to 'state' by executing the L1-handler entry point.
-    pub fn execute<S>(
+    pub fn execute<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
         remaining_gas: u128,
-    ) -> Result<TransactionExecutionInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
+    ) -> Result<TransactionExecutionInfo, TransactionError> {
         let mut resources_manager = ExecutionResourcesManager::default();
         let entrypoint = ExecutionEntryPoint::new(
             self.contract_address.clone(),
@@ -92,17 +111,21 @@ impl L1Handler {
             remaining_gas,
         );
 
-        let call_info = if self.skip_execute {
-            None
+        let ExecutionResult {
+            call_info,
+            revert_error,
+            n_reverted_steps,
+        } = if self.skip_execute {
+            ExecutionResult::default()
         } else {
-            Some(entrypoint.execute(
+            entrypoint.execute(
                 state,
                 block_context,
                 &mut resources_manager,
                 &mut self.get_execution_context(block_context.invoke_tx_max_n_steps)?,
-                false,
-                false,
-            )?)
+                true,
+                block_context.invoke_tx_max_n_steps,
+            )?
         };
 
         let changes = state.count_actual_storage_changes();
@@ -112,6 +135,7 @@ impl L1Handler {
             TransactionType::L1Handler,
             changes,
             Some(self.get_payload_size()),
+            n_reverted_steps,
         )?;
 
         // Enforce L1 fees.
@@ -134,14 +158,13 @@ impl L1Handler {
             }
         }
 
-        Ok(
-            TransactionExecutionInfo::create_concurrent_stage_execution_info(
-                None,
-                call_info,
-                actual_resources,
-                Some(TransactionType::L1Handler),
-            ),
-        )
+        Ok(TransactionExecutionInfo::new_without_fee_info(
+            None,
+            call_info,
+            revert_error,
+            actual_resources,
+            Some(TransactionType::L1Handler),
+        ))
     }
 
     /// Returns the payload size of the corresponding L1-to-L2 message.
@@ -185,15 +208,15 @@ impl L1Handler {
 mod test {
     use std::{
         collections::{HashMap, HashSet},
-        path::PathBuf,
+        sync::Arc,
     };
 
+    use crate::services::api::contract_classes::deprecated_contract_class::EntryPointType;
     use cairo_vm::{
         felt::{felt_str, Felt252},
         vm::runners::cairo_runner::ExecutionResources,
     };
     use num_traits::{Num, Zero};
-    use starknet_contract_class::EntryPointType;
 
     use crate::{
         definitions::{block_context::BlockContext, transaction_type::TransactionType},
@@ -231,8 +254,7 @@ mod test {
         let mut state_reader = InMemoryStateReader::default();
         // Set contract_class
         let class_hash = [1; 32];
-        let contract_class =
-            ContractClass::try_from(PathBuf::from("starknet_programs/l1l2.json")).unwrap();
+        let contract_class = ContractClass::from_path("starknet_programs/l1l2.json").unwrap();
         // Set contact_state
         let contract_address = Address(0.into());
         let nonce = Felt252::zero();
@@ -244,7 +266,7 @@ mod test {
             .address_to_nonce
             .insert(contract_address, nonce);
 
-        let mut state = CachedState::new(state_reader.clone(), None, None);
+        let mut state = CachedState::new(Arc::new(state_reader), None, None);
 
         // Initialize state.contract_classes
         state.set_contract_classes(HashMap::new()).unwrap();
@@ -254,11 +276,6 @@ mod test {
             .unwrap();
 
         let mut block_context = BlockContext::default();
-        block_context.cairo_resource_fee_weights = HashMap::from([
-            (String::from("l1_gas_usage"), 0.into()),
-            (String::from("pedersen_builtin"), 16.into()),
-            (String::from("range_check_builtin"), 70.into()),
-        ]);
         block_context.starknet_os_config.gas_price = 1;
 
         let tx_exec = l1_handler
@@ -309,14 +326,15 @@ mod test {
                 internal_calls: vec![],
                 gas_consumed: 0,
                 failure_flag: false,
-                trace: vec![],
             }),
+            revert_error: None,
             fee_transfer_info: None,
             actual_fee: 0,
             actual_resources: HashMap::from([
+                ("n_steps".to_string(), 1229),
                 ("pedersen_builtin".to_string(), 13),
                 ("range_check_builtin".to_string(), 23),
-                ("l1_gas_usage".to_string(), 18471),
+                ("l1_gas_usage".to_string(), 19695),
             ]),
             tx_type: Some(TransactionType::L1Handler),
         }

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use cairo_vm::felt::{felt_str, Felt252};
 use num_traits::Zero;
@@ -20,9 +20,9 @@ static ALLOC: MiMalloc = MiMalloc;
 
 lazy_static! {
     // include_str! doesn't seem to work in CI
-    static ref CONTRACT_CLASS: ContractClass = ContractClass::try_from(PathBuf::from(
+    static ref CONTRACT_CLASS: ContractClass = ContractClass::from_path(
         "starknet_programs/first_contract.json",
-    )).unwrap();
+    ).unwrap();
 
     static ref CONTRACT_PATH: PathBuf = PathBuf::from("starknet_programs/first_contract.json");
 
@@ -99,7 +99,7 @@ fn create_initial_state() -> CachedState<InMemoryStateReader> {
             state_reader
                 .address_to_storage_mut()
                 .insert((CONTRACT_ADDRESS.clone(), [0; 32]), Felt252::zero());
-            state_reader
+            Arc::new(state_reader)
         },
         Some(HashMap::new()),
         None,

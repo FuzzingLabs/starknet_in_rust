@@ -1,3 +1,6 @@
+use crate::services::api::contract_classes::deprecated_contract_class::{
+    ContractEntryPoint, EntryPointType,
+};
 /// Contains functionality for computing class hashes for deprecated Declare transactions
 /// (ie, declarations that do not correspond to Cairo 1 contracts)
 /// The code used for hinted class hash computation was extracted from the Pathfinder and xJonathanLEI implementations
@@ -13,24 +16,23 @@ use cairo_vm::felt::Felt252;
 use num_traits::Zero;
 use serde::Serialize;
 use sha3::Digest;
-use starknet_contract_class::{ContractEntryPoint, EntryPointType};
 use std::{borrow::Cow, collections::BTreeMap, io};
 
 /// Instead of doing a Mask with 250 bits, we are only masking the most significant byte.
 pub const MASK_3: u8 = 0x03;
 
+/// Returns the contract entry points.
 fn get_contract_entry_points(
     contract_class: &ContractClass,
     entry_point_type: &EntryPointType,
 ) -> Result<Vec<ContractEntryPoint>, ContractAddressError> {
-    let program_length = contract_class.program().iter_data().count();
-
     let entry_points = contract_class
         .entry_points_by_type()
         .get(entry_point_type)
         .ok_or(ContractAddressError::NoneExistingEntryPointType)?;
 
-    let program_len = program_length;
+    let program_len = contract_class.program().iter_data().count();
+
     for entry_point in entry_points {
         if entry_point.offset() > program_len {
             return Err(ContractAddressError::InvalidOffset(entry_point.offset()));
@@ -39,6 +41,7 @@ fn get_contract_entry_points(
     Ok(entry_points.to_owned())
 }
 
+/// Recursively add extra spaces to Cairo named tuple representations in a JSON structure.
 fn add_extra_space_to_cairo_named_tuples(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Array(v) => walk_array(v),
@@ -47,12 +50,14 @@ fn add_extra_space_to_cairo_named_tuples(value: &mut serde_json::Value) {
     }
 }
 
+/// Helper function to walk through a JSON array and apply extra space to cairo named tuples.
 fn walk_array(array: &mut [serde_json::Value]) {
     for v in array.iter_mut() {
         add_extra_space_to_cairo_named_tuples(v);
     }
 }
 
+/// Helper function to walk through a JSON map and apply extra space to cairo named tuples.
 fn walk_map(object: &mut serde_json::Map<String, serde_json::Value>) {
     for (k, v) in object.iter_mut() {
         match v {
@@ -67,6 +72,7 @@ fn walk_map(object: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
+/// Add extra space to named tuple type definition.
 fn add_extra_space_to_named_tuple_type_definition<'a>(
     key: &str,
     value: &'a str,
@@ -78,6 +84,7 @@ fn add_extra_space_to_named_tuple_type_definition<'a>(
     }
 }
 
+/// Replaces ": " with " : " and "  :" with " :" for Cairo-specific formatting.
 fn add_extra_space_before_colon(v: &str) -> String {
     // This is required because if we receive an already correct ` : `, we will still
     // "repair" it to `  : ` which we then fix at the end.
@@ -87,11 +94,13 @@ fn add_extra_space_before_colon(v: &str) -> String {
 struct KeccakWriter(sha3::Keccak256);
 
 impl std::io::Write for KeccakWriter {
+    /// Write data into the Keccak256 hasher.
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0.update(buf);
         Ok(buf.len())
     }
 
+    /// No operation is required for flushing, as we finalize after writing.
     fn flush(&mut self) -> std::io::Result<()> {
         // noop is fine, we'll finalize after the write phase
         Ok(())
@@ -103,6 +112,7 @@ impl std::io::Write for KeccakWriter {
 struct PythonDefaultFormatter;
 
 impl serde_json::ser::Formatter for PythonDefaultFormatter {
+    /// Handles formatting for array values.
     fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
     where
         W: ?Sized + std::io::Write,
@@ -114,6 +124,7 @@ impl serde_json::ser::Formatter for PythonDefaultFormatter {
         }
     }
 
+    /// Handles formatting for object keys.
     fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
     where
         W: ?Sized + std::io::Write,
@@ -125,6 +136,7 @@ impl serde_json::ser::Formatter for PythonDefaultFormatter {
         }
     }
 
+    /// Handles formatting for object values.
     fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
     where
         W: ?Sized + std::io::Write,
@@ -132,6 +144,7 @@ impl serde_json::ser::Formatter for PythonDefaultFormatter {
         writer.write_all(b": ")
     }
 
+    /// Custom logic for writing string fragments, handling non-ASCII characters.
     #[inline]
     fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> io::Result<()>
     where
@@ -211,10 +224,10 @@ pub struct CairoProgramToHash<'a> {
 
 /// Computes the hash of the contract class, including hints.
 /// We are not supporting backward compatibility now.
-fn compute_hinted_class_hash(
-    contract_class: &ContractClass,
+pub(crate) fn compute_hinted_class_hash(
+    contract_class: &serde_json::Value,
 ) -> Result<Felt252, ContractAddressError> {
-    let program_as_string = contract_class.program_json.to_string();
+    let program_as_string = contract_class.to_string();
     let mut cairo_program_hash: CairoContractDefinition = serde_json::from_str(&program_as_string)
         .map_err(|err| ContractAddressError::InvalidProgramJson(err.to_string()))?;
 
@@ -267,6 +280,7 @@ fn compute_hinted_class_hash(
     Ok(truncated_keccak(<[u8; 32]>::from(hash.finalize())))
 }
 
+/// Truncate the given Keccak hash to fit within Felt252's constraints.
 pub(crate) fn truncated_keccak(mut plain: [u8; 32]) -> Felt252 {
     // python code masks with (2**250 - 1) which starts 0x03 and is followed by 31 0xff in be
     // truncation is needed not to overflow the field element.
@@ -274,6 +288,7 @@ pub(crate) fn truncated_keccak(mut plain: [u8; 32]) -> Felt252 {
     Felt252::from_bytes_be(&plain)
 }
 
+/// Returns the hashed entry points of a contract class.
 fn get_contract_entry_points_hashed(
     contract_class: &ContractClass,
     entry_point_type: &EntryPointType,
@@ -291,6 +306,7 @@ fn get_contract_entry_points_hashed(
     )?)
 }
 
+/// Compute the hash for a deprecated contract class.
 pub fn compute_deprecated_class_hash(
     contract_class: &ContractClass,
 ) -> Result<Felt252, ContractAddressError> {
@@ -320,7 +336,7 @@ pub fn compute_deprecated_class_hash(
 
     let builtin_list = compute_hash_on_elements(&builtin_list_vec)?;
 
-    let hinted_class_hash = compute_hinted_class_hash(contract_class)?;
+    let hinted_class_hash = contract_class.hinted_class_hash();
 
     let mut bytecode_vector = Vec::new();
 
@@ -340,7 +356,7 @@ pub fn compute_deprecated_class_hash(
         l1_handlers,
         constructors,
         builtin_list,
-        hinted_class_hash,
+        hinted_class_hash.clone(),
         bytecode,
     ];
 
@@ -349,29 +365,20 @@ pub fn compute_deprecated_class_hash(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, str::FromStr};
-
     use super::*;
     use cairo_vm::felt::{felt_str, Felt252};
     use coverage_helper::test;
     use num_traits::Num;
-    use starknet_contract_class::ParsedContractClass;
 
     #[test]
     fn test_compute_hinted_class_hash_with_abi() {
-        let contract_str =
-            fs::read_to_string("starknet_programs/raw_contract_classes/class_with_abi.json")
+        let contract_class =
+            ContractClass::from_path("starknet_programs/raw_contract_classes/class_with_abi.json")
                 .unwrap();
-        let parsed_contract_class = ParsedContractClass::try_from(contract_str.as_str()).unwrap();
-        let contract_class = ContractClass {
-            program_json: serde_json::Value::from_str(&contract_str).unwrap(),
-            program: parsed_contract_class.program,
-            entry_points_by_type: parsed_contract_class.entry_points_by_type,
-            abi: parsed_contract_class.abi,
-        };
+
         assert_eq!(
-            compute_hinted_class_hash(&contract_class).unwrap(),
-            Felt252::from_str_radix(
+            contract_class.hinted_class_hash(),
+            &Felt252::from_str_radix(
                 "1164033593603051336816641706326288678020608687718343927364853957751413025239",
                 10
             )
@@ -381,14 +388,7 @@ mod tests {
 
     #[test]
     fn test_compute_class_hash_1354433237b0039baa138bf95b98fe4a8ae3df7ac4fd4d4845f0b41cd11bec4() {
-        let contract_str = fs::read_to_string("starknet_programs/raw_contract_classes/0x1354433237b0039baa138bf95b98fe4a8ae3df7ac4fd4d4845f0b41cd11bec4.json").unwrap();
-        let parsed_contract_class = ParsedContractClass::try_from(contract_str.as_str()).unwrap();
-        let contract_class = ContractClass {
-            program_json: serde_json::Value::from_str(&contract_str).unwrap(),
-            program: parsed_contract_class.program,
-            entry_points_by_type: parsed_contract_class.entry_points_by_type,
-            abi: parsed_contract_class.abi,
-        };
+        let contract_class = ContractClass::from_path("starknet_programs/raw_contract_classes/0x1354433237b0039baa138bf95b98fe4a8ae3df7ac4fd4d4845f0b41cd11bec4.json").unwrap();
 
         assert_eq!(
             compute_deprecated_class_hash(&contract_class).unwrap(),
@@ -403,14 +403,7 @@ mod tests {
     #[test]
     fn test_compute_class_hash_0x03131fa018d520a037686ce3efddeab8f28895662f019ca3ca18a626650f7d1e()
     {
-        let contract_str = fs::read_to_string("starknet_programs/raw_contract_classes/0x03131fa018d520a037686ce3efddeab8f28895662f019ca3ca18a626650f7d1e.json").unwrap();
-        let parsed_contract_class = ParsedContractClass::try_from(contract_str.as_str()).unwrap();
-        let contract_class = ContractClass {
-            program_json: serde_json::Value::from_str(&contract_str).unwrap(),
-            program: parsed_contract_class.program,
-            entry_points_by_type: parsed_contract_class.entry_points_by_type,
-            abi: parsed_contract_class.abi,
-        };
+        let contract_class = ContractClass::from_path("starknet_programs/raw_contract_classes/0x03131fa018d520a037686ce3efddeab8f28895662f019ca3ca18a626650f7d1e.json").unwrap();
 
         assert_eq!(
             compute_deprecated_class_hash(&contract_class).unwrap(),
@@ -425,14 +418,7 @@ mod tests {
     #[test]
     fn test_compute_class_hash_0x025ec026985a3bf9d0cc1fe17326b245dfdc3ff89b8fde106542a3ea56c5a918()
     {
-        let contract_str = fs::read_to_string("starknet_programs/raw_contract_classes/0x025ec026985a3bf9d0cc1fe17326b245dfdc3ff89b8fde106542a3ea56c5a918.json").unwrap();
-        let parsed_contract_class = ParsedContractClass::try_from(contract_str.as_str()).unwrap();
-        let contract_class = ContractClass {
-            program_json: serde_json::Value::from_str(&contract_str).unwrap(),
-            program: parsed_contract_class.program,
-            entry_points_by_type: parsed_contract_class.entry_points_by_type,
-            abi: parsed_contract_class.abi,
-        };
+        let contract_class = ContractClass::from_path("starknet_programs/raw_contract_classes/0x025ec026985a3bf9d0cc1fe17326b245dfdc3ff89b8fde106542a3ea56c5a918.json").unwrap();
 
         assert_eq!(
             compute_deprecated_class_hash(&contract_class).unwrap(),
@@ -447,14 +433,7 @@ mod tests {
     #[test]
     fn test_compute_class_hash_0x02c3348ad109f7f3967df6494b3c48741d61675d9a7915b265aa7101a631dc33()
     {
-        let contract_str = fs::read_to_string("starknet_programs/raw_contract_classes/0x02c3348ad109f7f3967df6494b3c48741d61675d9a7915b265aa7101a631dc33.json").unwrap();
-        let parsed_contract_class = ParsedContractClass::try_from(contract_str.as_str()).unwrap();
-        let contract_class = ContractClass {
-            program_json: serde_json::Value::from_str(&contract_str).unwrap(),
-            program: parsed_contract_class.program,
-            entry_points_by_type: parsed_contract_class.entry_points_by_type,
-            abi: parsed_contract_class.abi,
-        };
+        let contract_class = ContractClass::from_path("starknet_programs/raw_contract_classes/0x02c3348ad109f7f3967df6494b3c48741d61675d9a7915b265aa7101a631dc33.json").unwrap();
 
         assert_eq!(
             compute_deprecated_class_hash(&contract_class).unwrap(),
@@ -471,19 +450,44 @@ mod tests {
     #[test]
     fn test_compute_class_hash_0x00801ad5dc7c995addf7fbce1c4c74413586acb44f9ff44ba903a08a6153fa80()
     {
-        let contract_str = fs::read_to_string("starknet_programs/raw_contract_classes/0x00801ad5dc7c995addf7fbce1c4c74413586acb44f9ff44ba903a08a6153fa80.json").unwrap();
-        let parsed_contract_class = ParsedContractClass::try_from(contract_str.as_str()).unwrap();
-        let contract_class = ContractClass {
-            program_json: serde_json::Value::from_str(&contract_str).unwrap(),
-            program: parsed_contract_class.program,
-            entry_points_by_type: parsed_contract_class.entry_points_by_type,
-            abi: parsed_contract_class.abi,
-        };
+        let contract_class = ContractClass::from_path("starknet_programs/raw_contract_classes/0x00801ad5dc7c995addf7fbce1c4c74413586acb44f9ff44ba903a08a6153fa80.json").unwrap();
 
         assert_eq!(
             compute_deprecated_class_hash(&contract_class).unwrap(),
             felt_str!(
                 "226341635385251092193534262877925620859725853394183386505497817801290939008"
+            )
+        );
+    }
+
+    #[test]
+    fn test_compute_class_hash_0x4d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f_mainnet(
+    ) {
+        let contract_class = ContractClass::from_path(
+            "starknet_programs/raw_contract_classes/0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f_mainnet.json"
+        ).unwrap();
+
+        assert_eq!(
+            compute_deprecated_class_hash(&contract_class).unwrap(),
+            felt_str!(
+                "4d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f",
+                16
+            )
+        );
+    }
+
+    #[test]
+    fn test_compute_class_hash_0x4d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f_goerli(
+    ) {
+        let contract_class = ContractClass::from_path(
+            "starknet_programs/raw_contract_classes/0x04d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f_goerli.json"
+        ).unwrap();
+
+        assert_eq!(
+            compute_deprecated_class_hash(&contract_class).unwrap(),
+            felt_str!(
+                "4d07e40e93398ed3c76981e72dd1fd22557a78ce36c0515f679e27f0bb5bc5f",
+                16
             )
         );
     }

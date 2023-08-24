@@ -17,14 +17,13 @@ use starknet_in_rust::{
     transaction::{declare::Declare, Deploy, DeployAccount, InvokeFunction},
     utils::Address,
 };
-use std::{fs::File, hint::black_box, io::BufReader};
+use std::{hint::black_box, sync::Arc};
 
 lazy_static! {
     // include_str! doesn't seem to work in CI
-    static ref CONTRACT_CLASS: ContractClass = ContractClass::try_from(BufReader::new(File::open(
+    static ref CONTRACT_CLASS: ContractClass = ContractClass::from_path(
         "starknet_programs/account_without_validation.json",
-    ).unwrap()))
-    .unwrap();
+    ).unwrap();
     static ref CLASS_HASH: Felt252 = compute_deprecated_class_hash(&CONTRACT_CLASS).unwrap();
     static ref CLASS_HASH_BYTES: [u8; 32] = CLASS_HASH.clone().to_be_bytes();
     static ref SALT: Felt252 = felt_str!(
@@ -61,7 +60,7 @@ fn main() {
 fn deploy_account() {
     const RUNS: usize = 500;
 
-    let state_reader = InMemoryStateReader::default();
+    let state_reader = Arc::new(InMemoryStateReader::default());
     let mut state = CachedState::new(state_reader, Some(Default::default()), None);
 
     state
@@ -85,7 +84,6 @@ fn deploy_account() {
                 signature,
                 SALT.clone(),
                 StarknetChainId::TestNet.to_felt(),
-                None,
             )
             .unwrap();
             internal_deploy_account.execute(&mut state_copy, block_context)
@@ -98,7 +96,7 @@ fn deploy_account() {
 fn declare() {
     const RUNS: usize = 5;
 
-    let state_reader = InMemoryStateReader::default();
+    let state_reader = Arc::new(InMemoryStateReader::default());
     let state = CachedState::new(state_reader, Some(Default::default()), None);
 
     let block_context = &Default::default();
@@ -131,7 +129,7 @@ fn declare() {
 fn deploy() {
     const RUNS: usize = 8;
 
-    let state_reader = InMemoryStateReader::default();
+    let state_reader = Arc::new(InMemoryStateReader::default());
     let mut state = CachedState::new(state_reader, Some(Default::default()), None);
 
     state
@@ -154,7 +152,6 @@ fn deploy() {
                 vec![],
                 StarknetChainId::TestNet.to_felt(),
                 0.into(),
-                None,
             )
             .unwrap();
             internal_deploy.execute(&mut state_copy, block_context)
@@ -167,7 +164,7 @@ fn deploy() {
 fn invoke() {
     const RUNS: usize = 100;
 
-    let state_reader = InMemoryStateReader::default();
+    let state_reader = Arc::new(InMemoryStateReader::default());
     let mut state = CachedState::new(state_reader, Some(Default::default()), None);
 
     state
@@ -185,7 +182,6 @@ fn invoke() {
         vec![],
         StarknetChainId::TestNet.to_felt(),
         0.into(),
-        None,
     )
     .unwrap();
 

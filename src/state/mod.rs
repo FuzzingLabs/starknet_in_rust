@@ -12,7 +12,64 @@ use crate::{
     },
 };
 use cairo_vm::{felt::Felt252, vm::runners::cairo_runner::ExecutionResources};
-use std::collections::HashMap;
+use getset::Getters;
+use std::{collections::HashMap, sync::Arc};
+
+use crate::{
+    transaction::error::TransactionError,
+    utils::{Address, ClassHash},
+};
+
+use self::{cached_state::CachedState, state_api::StateReader};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockInfo {
+    /// The sequence number of the last block created.
+    pub block_number: u64,
+    /// Timestamp of the beginning of the last block creation attempt.
+    pub block_timestamp: u64,
+    /// L1 gas price (in Wei) measured at the beginning of the last block creation attempt.
+    pub gas_price: u64,
+    /// The sequencer address of this block.
+    pub sequencer_address: Address,
+}
+
+impl BlockInfo {
+    pub fn empty(sequencer_address: Address) -> Self {
+        BlockInfo {
+            block_number: 0, // To do: In cairo-lang, this value is set to -1
+            block_timestamp: 0,
+            gas_price: 0,
+            sequencer_address,
+        }
+    }
+
+    pub fn validate_legal_progress(
+        &self,
+        next_block_info: &BlockInfo,
+    ) -> Result<(), TransactionError> {
+        if self.block_number + 1 != next_block_info.block_number {
+            return Err(TransactionError::InvalidBlockNumber);
+        }
+
+        if self.block_timestamp >= next_block_info.block_timestamp {
+            return Err(TransactionError::InvalidBlockTimestamp);
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for BlockInfo {
+    fn default() -> Self {
+        Self {
+            block_number: 0,
+            block_timestamp: 0,
+            gas_price: 0,
+            sequencer_address: Address(0.into()),
+        }
+    }
+}
 
 use crate::{
     transaction::error::TransactionError,
@@ -105,7 +162,8 @@ impl ExecutionResourcesManager {
     }
 }
 
-#[derive(Default, Clone, PartialEq, Debug)]
+#[derive(Default, Clone, PartialEq, Debug, Getters)]
+#[getset(get = "pub")]
 pub struct StateDiff {
     pub(crate) address_to_class_hash: HashMap<Address, ClassHash>,
     pub(crate) address_to_nonce: HashMap<Address, Felt252>,
@@ -114,6 +172,20 @@ pub struct StateDiff {
 }
 
 impl StateDiff {
+    pub fn new(
+        address_to_class_hash: HashMap<Address, ClassHash>,
+        address_to_nonce: HashMap<Address, Felt252>,
+        class_hash_to_compiled_class: HashMap<ClassHash, CompiledClass>,
+        storage_updates: HashMap<Address, HashMap<Felt252, Felt252>>,
+    ) -> Self {
+        StateDiff {
+            address_to_class_hash,
+            address_to_nonce,
+            class_hash_to_compiled_class,
+            storage_updates,
+        }
+    }
+
     pub fn from_cached_state<T>(cached_state: CachedState<T>) -> Result<Self, StateError>
     where
         T: StateReader,
@@ -150,7 +222,7 @@ impl StateDiff {
         })
     }
 
-    pub fn to_cached_state<T>(&self, state_reader: T) -> Result<CachedState<T>, StateError>
+    pub fn to_cached_state<T>(&self, state_reader: Arc<T>) -> Result<CachedState<T>, StateError>
     where
         T: StateReader + Clone,
     {
@@ -222,7 +294,7 @@ fn test_validate_legal_progress() {
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
 
     use super::StateDiff;
     use crate::{
@@ -251,7 +323,7 @@ mod test {
             .address_to_nonce
             .insert(contract_address, nonce);
 
-        let cached_state = CachedState::new(state_reader, None, None);
+        let cached_state = CachedState::new(Arc::new(state_reader), None, None);
 
         let diff = StateDiff::from_cached_state(cached_state).unwrap();
 
@@ -311,11 +383,11 @@ mod test {
             .address_to_nonce
             .insert(contract_address.clone(), nonce);
 
-        let mut cached_state_original = CachedState::new(state_reader.clone(), None, None);
+        let cached_state_original = CachedState::new(Arc::new(state_reader.clone()), None, None);
 
         let diff = StateDiff::from_cached_state(cached_state_original.clone()).unwrap();
 
-        let mut cached_state = diff.to_cached_state(state_reader).unwrap();
+        let cached_state = diff.to_cached_state(Arc::new(state_reader)).unwrap();
 
         assert_eq!(
             cached_state_original.contract_classes(),
@@ -359,7 +431,7 @@ mod test {
             HashMap::new(),
         );
         let cached_state = CachedState::new_for_testing(
-            state_reader,
+            Arc::new(state_reader),
             Some(ContractClassCache::new()),
             cache,
             None,

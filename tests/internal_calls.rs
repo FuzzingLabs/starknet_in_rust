@@ -1,8 +1,10 @@
 #![deny(warnings)]
 
+use std::sync::Arc;
+
 use cairo_vm::felt::Felt252;
 use num_traits::Zero;
-use starknet_contract_class::EntryPointType;
+use starknet_in_rust::EntryPointType;
 use starknet_in_rust::{
     definitions::{block_context::BlockContext, constants::TRANSACTION_VERSION},
     execution::{
@@ -13,13 +15,11 @@ use starknet_in_rust::{
     state::{in_memory_state_reader::InMemoryStateReader, ExecutionResourcesManager},
     utils::{calculate_sn_keccak, Address, ClassHash},
 };
-use std::path::PathBuf;
 
 #[test]
 fn test_internal_calls() {
-    let contract_class =
-        ContractClass::try_from(PathBuf::from("starknet_programs/internal_calls.json"))
-            .expect("Could not load contract from JSON");
+    let contract_class = ContractClass::from_path("starknet_programs/internal_calls.json")
+        .expect("Could not load contract from JSON");
 
     let block_context = BlockContext::default();
     let mut tx_execution_context = TransactionExecutionContext::create_for_testing(
@@ -46,7 +46,7 @@ fn test_internal_calls() {
         .insert(storage_entry, storage);
 
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some([([0x01; 32], contract_class)].into_iter().collect()),
         None,
     );
@@ -72,9 +72,11 @@ fn test_internal_calls() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .expect("Could not execute contract");
+
+    let call_info = call_info.call_info.unwrap();
 
     assert_eq!(call_info.internal_calls.len(), 1);
     assert_eq!(call_info.internal_calls[0].internal_calls.len(), 1);

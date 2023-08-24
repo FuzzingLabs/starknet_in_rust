@@ -1,4 +1,9 @@
+use super::fee::charge_fee;
 use super::{invoke_function::verify_no_calls_to_other_contracts, Transaction};
+use crate::definitions::constants::QUERY_VERSION_BASE;
+use crate::execution::execution_entry_point::ExecutionResult;
+use crate::services::api::contract_classes::deprecated_contract_class::EntryPointType;
+use crate::state::cached_state::CachedState;
 use crate::{
     core::{
         errors::state_errors::StateError,
@@ -23,17 +28,12 @@ use crate::{
     state::state_api::{State, StateReader},
     state::ExecutionResourcesManager,
     syscalls::syscall_handler_errors::SyscallHandlerError,
-    transaction::{
-        error::TransactionError,
-        fee::{calculate_tx_fee, execute_fee_transfer, FeeInfo},
-    },
+    transaction::error::TransactionError,
     utils::{calculate_tx_resources, Address, ClassHash},
 };
 use cairo_vm::felt::Felt252;
 use getset::Getters;
 use num_traits::Zero;
-use starknet_contract_class::EntryPointType;
-use std::collections::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateSelector {
@@ -74,7 +74,6 @@ impl DeployAccount {
         signature: Vec<Felt252>,
         contract_address_salt: Felt252,
         chain_id: Felt252,
-        hash_value: Option<Felt252>,
     ) -> Result<Self, SyscallHandlerError> {
         let contract_address = Address(calculate_contract_address(
             &contract_address_salt,
@@ -83,19 +82,50 @@ impl DeployAccount {
             Address(Felt252::zero()),
         )?);
 
-        let hash_value = match hash_value {
-            Some(hash) => hash,
-            None => calculate_deploy_account_transaction_hash(
-                version.clone(),
-                &contract_address,
-                Felt252::from_bytes_be(&class_hash),
-                &constructor_calldata,
-                max_fee,
-                nonce.clone(),
-                contract_address_salt.clone(),
-                chain_id,
-            )?,
-        };
+        let hash_value = calculate_deploy_account_transaction_hash(
+            version.clone(),
+            &contract_address,
+            Felt252::from_bytes_be(&class_hash),
+            &constructor_calldata,
+            max_fee,
+            nonce.clone(),
+            contract_address_salt.clone(),
+            chain_id,
+        )?;
+
+        Ok(Self {
+            contract_address,
+            contract_address_salt,
+            class_hash,
+            constructor_calldata,
+            version,
+            nonce,
+            max_fee,
+            hash_value,
+            signature,
+            skip_execute: false,
+            skip_validate: false,
+            skip_fee_transfer: false,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_tx_hash(
+        class_hash: ClassHash,
+        max_fee: u128,
+        version: Felt252,
+        nonce: Felt252,
+        constructor_calldata: Vec<Felt252>,
+        signature: Vec<Felt252>,
+        contract_address_salt: Felt252,
+        hash_value: Felt252,
+    ) -> Result<Self, SyscallHandlerError> {
+        let contract_address = Address(calculate_contract_address(
+            &contract_address_salt,
+            &Felt252::from_bytes_be(&class_hash),
+            &constructor_calldata,
+            Address(Felt252::zero()),
+        )?);
 
         Ok(Self {
             contract_address,
@@ -120,27 +150,28 @@ impl DeployAccount {
         }
     }
 
-    pub fn execute<S>(
+    pub fn execute<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
-    ) -> Result<TransactionExecutionInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
-        let tx_info = self.apply(state, block_context)?;
-
+    ) -> Result<TransactionExecutionInfo, TransactionError> {
         self.handle_nonce(state)?;
-        let (fee_transfer_info, actual_fee) =
-            self.charge_fee(state, &tx_info.actual_resources, block_context)?;
+        let mut tx_info = self.apply(state, block_context)?;
 
-        Ok(
-            TransactionExecutionInfo::from_concurrent_state_execution_info(
-                tx_info,
-                actual_fee,
-                fee_transfer_info,
-            ),
-        )
+        let mut tx_execution_context =
+            self.get_execution_context(block_context.invoke_tx_max_n_steps);
+        let (fee_transfer_info, actual_fee) = charge_fee(
+            state,
+            &tx_info.actual_resources,
+            block_context,
+            self.max_fee,
+            &mut tx_execution_context,
+            self.skip_fee_transfer,
+        )?;
+
+        tx_info.set_fee_info(actual_fee, fee_transfer_info);
+
+        Ok(tx_info)
     }
 
     fn constructor_entry_points_empty(
@@ -159,14 +190,11 @@ impl DeployAccount {
 
     /// Execute a call to the cairo-vm using the accounts_validation.cairo contract to validate
     /// the contract that is being declared. Then it returns the transaction execution info of the run.
-    fn apply<S>(
+    fn apply<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
-    ) -> Result<TransactionExecutionInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
+    ) -> Result<TransactionExecutionInfo, TransactionError> {
         let contract_class = state.get_contract_class(&self.class_hash)?;
 
         state.deploy_contract(self.contract_address.clone(), self.class_hash)?;
@@ -187,29 +215,26 @@ impl DeployAccount {
             TransactionType::DeployAccount,
             state.count_actual_storage_changes(),
             None,
+            0,
         )
         .map_err::<TransactionError, _>(|_| TransactionError::ResourcesCalculation)?;
 
-        Ok(
-            TransactionExecutionInfo::create_concurrent_stage_execution_info(
-                validate_info,
-                Some(constructor_call_info),
-                actual_resources,
-                Some(TransactionType::DeployAccount),
-            ),
-        )
+        Ok(TransactionExecutionInfo::new_without_fee_info(
+            validate_info,
+            Some(constructor_call_info),
+            None,
+            actual_resources,
+            Some(TransactionType::DeployAccount),
+        ))
     }
 
-    pub fn handle_constructor<S>(
+    pub fn handle_constructor<S: StateReader>(
         &self,
         contract_class: CompiledClass,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
         resources_manager: &mut ExecutionResourcesManager,
-    ) -> Result<CallInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
+    ) -> Result<CallInfo, TransactionError> {
         if self.constructor_entry_points_empty(contract_class)? {
             if !self.constructor_calldata.is_empty() {
                 return Err(TransactionError::EmptyConstructorCalldata);
@@ -226,10 +251,11 @@ impl DeployAccount {
     }
 
     fn handle_nonce<S: State + StateReader>(&self, state: &mut S) -> Result<(), TransactionError> {
-        if self.version.is_zero() {
+        if self.version.is_zero() || self.version == *QUERY_VERSION_BASE {
             return Ok(());
         }
 
+        // In blockifier, get_nonce_at returns zero if no entry is found.
         let current_nonce = state.get_nonce_at(&self.contract_address)?;
         if current_nonce != self.nonce {
             return Err(TransactionError::InvalidTransactionNonce(
@@ -237,21 +263,16 @@ impl DeployAccount {
                 self.nonce.to_string(),
             ));
         }
-
         state.increment_nonce(&self.contract_address)?;
-
         Ok(())
     }
 
-    pub fn run_constructor_entrypoint<S>(
+    pub fn run_constructor_entrypoint<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
         resources_manager: &mut ExecutionResourcesManager,
-    ) -> Result<CallInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
+    ) -> Result<CallInfo, TransactionError> {
         let entry_point = ExecutionEntryPoint::new(
             self.contract_address.clone(),
             self.constructor_calldata.clone(),
@@ -263,17 +284,17 @@ impl DeployAccount {
             INITIAL_GAS_COST,
         );
 
-        let call_info = if self.skip_execute {
-            None
+        let ExecutionResult { call_info, .. } = if self.skip_execute {
+            ExecutionResult::default()
         } else {
-            Some(entry_point.execute(
+            entry_point.execute(
                 state,
                 block_context,
                 resources_manager,
                 &mut self.get_execution_context(block_context.validate_max_n_steps),
                 false,
-                false,
-            )?)
+                block_context.validate_max_n_steps,
+            )?
         };
 
         let call_info = verify_no_calls_to_other_contracts(&call_info)
@@ -293,16 +314,13 @@ impl DeployAccount {
         )
     }
 
-    pub fn run_validate_entrypoint<S>(
+    pub fn run_validate_entrypoint<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         resources_manager: &mut ExecutionResourcesManager,
         block_context: &BlockContext,
-    ) -> Result<Option<CallInfo>, TransactionError>
-    where
-        S: State + StateReader,
-    {
-        if self.version.is_zero() {
+    ) -> Result<Option<CallInfo>, TransactionError> {
+        if self.version.is_zero() || self.version == *QUERY_VERSION_BASE {
             return Ok(None);
         }
 
@@ -323,17 +341,17 @@ impl DeployAccount {
             INITIAL_GAS_COST,
         );
 
-        let call_info = if self.skip_execute {
-            None
+        let ExecutionResult { call_info, .. } = if self.skip_execute {
+            ExecutionResult::default()
         } else {
-            Some(call.execute(
+            call.execute(
                 state,
                 block_context,
                 resources_manager,
                 &mut self.get_execution_context(block_context.validate_max_n_steps),
                 false,
-                false,
-            )?)
+                block_context.validate_max_n_steps,
+            )?
         };
 
         verify_no_calls_to_other_contracts(&call_info)
@@ -342,51 +360,22 @@ impl DeployAccount {
         Ok(call_info)
     }
 
-    fn charge_fee<S>(
-        &self,
-        state: &mut S,
-        resources: &HashMap<String, usize>,
-        block_context: &BlockContext,
-    ) -> Result<FeeInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
-        if self.max_fee.is_zero() {
-            return Ok((None, 0));
-        }
-
-        let actual_fee = calculate_tx_fee(
-            resources,
-            block_context.starknet_os_config.gas_price,
-            block_context,
-        )?;
-
-        let mut tx_execution_context =
-            self.get_execution_context(block_context.invoke_tx_max_n_steps);
-        let fee_transfer_info = if self.skip_fee_transfer {
-            None
-        } else {
-            Some(execute_fee_transfer(
-                state,
-                block_context,
-                &mut tx_execution_context,
-                actual_fee,
-            )?)
-        };
-
-        Ok((fee_transfer_info, actual_fee))
-    }
-
     pub(crate) fn create_for_simulation(
         &self,
         skip_validate: bool,
         skip_execute: bool,
         skip_fee_transfer: bool,
+        ignore_max_fee: bool,
     ) -> Transaction {
         let tx = DeployAccount {
             skip_validate,
             skip_execute,
             skip_fee_transfer,
+            max_fee: if ignore_max_fee {
+                u128::MAX
+            } else {
+                self.max_fee
+            },
             ..self.clone()
         };
 
@@ -396,7 +385,7 @@ impl DeployAccount {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, sync::Arc};
 
     use super::*;
     use crate::{
@@ -411,14 +400,14 @@ mod tests {
     #[test]
     fn get_state_selector() {
         let path = PathBuf::from("starknet_programs/constructor.json");
-        let contract = ContractClass::try_from(path).unwrap();
+        let contract = ContractClass::from_path(path).unwrap();
 
         let hash = compute_deprecated_class_hash(&contract).unwrap();
         let class_hash = felt_to_hash(&hash);
 
         let block_context = BlockContext::default();
         let mut _state = CachedState::new(
-            InMemoryStateReader::default(),
+            Arc::new(InMemoryStateReader::default()),
             Some(Default::default()),
             None,
         );
@@ -432,7 +421,6 @@ mod tests {
             Vec::new(),
             0.into(),
             StarknetChainId::TestNet2.to_felt(),
-            None,
         )
         .unwrap();
 
@@ -448,14 +436,14 @@ mod tests {
     #[test]
     fn deploy_account_twice_should_fail() {
         let path = PathBuf::from("starknet_programs/constructor.json");
-        let contract = ContractClass::try_from(path).unwrap();
+        let contract = ContractClass::from_path(path).unwrap();
 
         let hash = compute_deprecated_class_hash(&contract).unwrap();
         let class_hash = felt_to_hash(&hash);
 
         let block_context = BlockContext::default();
         let mut state = CachedState::new(
-            InMemoryStateReader::default(),
+            Arc::new(InMemoryStateReader::default()),
             Some(Default::default()),
             None,
         );
@@ -469,7 +457,6 @@ mod tests {
             Vec::new(),
             0.into(),
             StarknetChainId::TestNet2.to_felt(),
-            None,
         )
         .unwrap();
 
@@ -482,7 +469,6 @@ mod tests {
             Vec::new(),
             0.into(),
             StarknetChainId::TestNet2.to_felt(),
-            None,
         )
         .unwrap();
 
@@ -502,14 +488,14 @@ mod tests {
     // Should panic at no calldata for constructor. Error managment not implemented yet.
     fn deploy_account_constructor_should_fail() {
         let path = PathBuf::from("starknet_programs/constructor.json");
-        let contract = ContractClass::try_from(path).unwrap();
+        let contract = ContractClass::from_path(path).unwrap();
 
         let hash = compute_deprecated_class_hash(&contract).unwrap();
         let class_hash = felt_to_hash(&hash);
 
         let block_context = BlockContext::default();
         let mut state = CachedState::new(
-            InMemoryStateReader::default(),
+            Arc::new(InMemoryStateReader::default()),
             Some(Default::default()),
             None,
         );
@@ -523,7 +509,6 @@ mod tests {
             Vec::new(),
             0.into(),
             StarknetChainId::TestNet2.to_felt(),
-            None,
         )
         .unwrap();
 

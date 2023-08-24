@@ -1,7 +1,15 @@
+use std::sync::Arc;
+
+use crate::execution::execution_entry_point::ExecutionResult;
+use crate::services::api::contract_classes::deprecated_contract_class::{
+    ContractClass, EntryPointType,
+};
+use crate::state::cached_state::CachedState;
+use crate::syscalls::syscall_handler_errors::SyscallHandlerError;
 use crate::{
     core::{
-        contract_address::compute_deprecated_class_hash, errors::state_errors::StateError,
-        transaction_hash::calculate_deploy_transaction_hash,
+        contract_address::compute_deprecated_class_hash, errors::hash_errors::HashError,
+        errors::state_errors::StateError, transaction_hash::calculate_deploy_transaction_hash,
     },
     definitions::{
         block_context::BlockContext, constants::CONSTRUCTOR_ENTRY_POINT_SELECTOR,
@@ -13,23 +21,19 @@ use crate::{
     },
     hash_utils::calculate_contract_address,
     services::api::{
-        contract_class_errors::ContractClassError,
-        contract_classes::{
-            compiled_class::CompiledClass, deprecated_contract_class::ContractClass,
-        },
+        contract_class_errors::ContractClassError, contract_classes::compiled_class::CompiledClass,
     },
     state::state_api::{State, StateReader},
     state::ExecutionResourcesManager,
-    syscalls::syscall_handler_errors::SyscallHandlerError,
     transaction::error::TransactionError,
     utils::{calculate_tx_resources, felt_to_hash, Address, ClassHash},
 };
 use cairo_vm::felt::Felt252;
 use num_traits::Zero;
-use starknet_contract_class::EntryPointType;
 
 use super::Transaction;
 
+/// Represents a Deploy Transaction in the starknet network
 #[derive(Debug, Clone)]
 pub struct Deploy {
     pub hash_value: Felt252,
@@ -37,6 +41,7 @@ pub struct Deploy {
     pub contract_address: Address,
     pub contract_address_salt: Felt252,
     pub contract_hash: ClassHash,
+    pub contract_class: CompiledClass,
     pub constructor_calldata: Vec<Felt252>,
     pub tx_type: TransactionType,
     pub skip_validate: bool,
@@ -51,10 +56,10 @@ impl Deploy {
         constructor_calldata: Vec<Felt252>,
         chain_id: Felt252,
         version: Felt252,
-        hash_value: Option<Felt252>,
     ) -> Result<Self, SyscallHandlerError> {
-        let class_hash = compute_deprecated_class_hash(&contract_class)
-            .map_err(|_| SyscallHandlerError::ErrorComputingHash)?;
+        let class_hash = compute_deprecated_class_hash(&contract_class).map_err(|e| {
+            SyscallHandlerError::HashError(HashError::FailedToComputeHash(e.to_string()))
+        })?;
 
         let contract_hash: ClassHash = felt_to_hash(&class_hash);
         let contract_address = Address(calculate_contract_address(
@@ -64,15 +69,12 @@ impl Deploy {
             Address(Felt252::zero()),
         )?);
 
-        let hash_value = match hash_value {
-            Some(hash) => hash,
-            None => calculate_deploy_transaction_hash(
-                version.clone(),
-                &contract_address,
-                &constructor_calldata,
-                chain_id,
-            )?,
-        };
+        let hash_value = calculate_deploy_transaction_hash(
+            version.clone(),
+            &contract_address,
+            &constructor_calldata,
+            chain_id,
+        )?;
 
         Ok(Deploy {
             hash_value,
@@ -80,6 +82,7 @@ impl Deploy {
             contract_address,
             contract_address_salt,
             contract_hash,
+            contract_class: CompiledClass::Deprecated(Arc::new(contract_class)),
             constructor_calldata,
             tx_type: TransactionType::Deploy,
             skip_validate: false,
@@ -88,6 +91,40 @@ impl Deploy {
         })
     }
 
+    pub fn new_with_tx_hash(
+        contract_address_salt: Felt252,
+        contract_class: ContractClass,
+        constructor_calldata: Vec<Felt252>,
+        version: Felt252,
+        hash_value: Felt252,
+    ) -> Result<Self, SyscallHandlerError> {
+        let class_hash = compute_deprecated_class_hash(&contract_class).map_err(|e| {
+            SyscallHandlerError::HashError(HashError::FailedToComputeHash(e.to_string()))
+        })?;
+        let contract_hash: ClassHash = felt_to_hash(&class_hash);
+        let contract_address = Address(calculate_contract_address(
+            &contract_address_salt,
+            &class_hash,
+            &constructor_calldata,
+            Address(Felt252::zero()),
+        )?);
+
+        Ok(Deploy {
+            hash_value,
+            version,
+            contract_address,
+            contract_address_salt,
+            contract_hash,
+            constructor_calldata,
+            contract_class: CompiledClass::Deprecated(Arc::new(contract_class)),
+            tx_type: TransactionType::Deploy,
+            skip_validate: false,
+            skip_execute: false,
+            skip_fee_transfer: false,
+        })
+    }
+
+    /// Returns the class hash of the deployed contract
     pub fn class_hash(&self) -> ClassHash {
         self.contract_hash
     }
@@ -105,23 +142,39 @@ impl Deploy {
             CompiledClass::Casm(class) => Ok(class.entry_points_by_type.constructor.is_empty()),
         }
     }
-
-    pub fn apply<S: State + StateReader>(
+    /// Deploys the contract in the starknet network and calls its constructor if it has one.
+    /// ## Parameters
+    /// - state: A state that implements the [`State`] and [`StateReader`] traits.
+    /// - block_context: The block's execution context.
+    pub fn apply<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
     ) -> Result<TransactionExecutionInfo, TransactionError> {
-        state.deploy_contract(self.contract_address.clone(), self.contract_hash)?;
-        let class_hash: ClassHash = self.contract_hash;
-        let contract_class = state.get_contract_class(&class_hash)?;
+        match self.contract_class.clone() {
+            CompiledClass::Casm(contract_class) => {
+                state.set_compiled_class(
+                    &Felt252::from_bytes_be(&self.contract_hash),
+                    contract_class.as_ref().clone(),
+                )?;
+            }
+            CompiledClass::Deprecated(contract_class) => {
+                state.set_contract_class(&self.contract_hash, &contract_class)?;
+            }
+        }
 
-        if self.constructor_entry_points_empty(contract_class)? {
+        state.deploy_contract(self.contract_address.clone(), self.contract_hash)?;
+
+        if self.constructor_entry_points_empty(self.contract_class.clone())? {
             // Contract has no constructors
             Ok(self.handle_empty_constructor(state)?)
         } else {
             self.invoke_constructor(state, block_context)
         }
     }
+    /// Executes the contract without constructor
+    /// ## Parameters
+    /// - state: A state that implements the [`State`] and [`StateReader`] traits.
 
     pub fn handle_empty_constructor<S: State + StateReader>(
         &self,
@@ -147,21 +200,25 @@ impl Deploy {
             self.tx_type,
             changes,
             None,
+            0,
         )?;
 
-        Ok(
-            TransactionExecutionInfo::create_concurrent_stage_execution_info(
-                None,
-                Some(call_info),
-                actual_resources,
-                Some(self.tx_type),
-            ),
-        )
+        Ok(TransactionExecutionInfo::new_without_fee_info(
+            None,
+            Some(call_info),
+            None,
+            actual_resources,
+            Some(self.tx_type),
+        ))
     }
 
-    pub fn invoke_constructor<S: State + StateReader>(
+    /// Execute the contract using its constructor
+    /// ## Parameters
+    /// - state: A state that implements the [`State`] and [`StateReader`] traits.
+    /// - block_context: The block's execution context.
+    pub fn invoke_constructor<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
     ) -> Result<TransactionExecutionInfo, TransactionError> {
         let call = ExecutionEntryPoint::new(
@@ -186,56 +243,60 @@ impl Deploy {
         );
 
         let mut resources_manager = ExecutionResourcesManager::default();
-        let call_info = call.execute(
+        let ExecutionResult {
+            call_info,
+            revert_error,
+            n_reverted_steps,
+        } = call.execute(
             state,
             block_context,
             &mut resources_manager,
             &mut tx_execution_context,
-            false,
-            false,
+            true,
+            block_context.validate_max_n_steps,
         )?;
 
         let changes = state.count_actual_storage_changes();
         let actual_resources = calculate_tx_resources(
             resources_manager,
-            &[Some(call_info.clone())],
+            &[call_info.clone()],
             self.tx_type,
             changes,
             None,
+            n_reverted_steps,
         )?;
 
-        Ok(
-            TransactionExecutionInfo::create_concurrent_stage_execution_info(
-                None,
-                Some(call_info),
-                actual_resources,
-                Some(self.tx_type),
-            ),
-        )
+        Ok(TransactionExecutionInfo::new_without_fee_info(
+            None,
+            call_info,
+            revert_error,
+            actual_resources,
+            Some(self.tx_type),
+        ))
     }
 
     /// Calculates actual fee used by the transaction using the execution
     /// info returned by apply(), then updates the transaction execution info with the data of the fee.
-    pub fn execute<S: State + StateReader>(
+    /// ## Parameters
+    /// - state: A state that implements the [`State`] and [`StateReader`] traits.
+    /// - block_context: The block's execution context.
+    pub fn execute<S: StateReader>(
         &self,
-        state: &mut S,
+        state: &mut CachedState<S>,
         block_context: &BlockContext,
     ) -> Result<TransactionExecutionInfo, TransactionError> {
-        let concurrent_exec_info = self.apply(state, block_context)?;
+        let mut tx_exec_info = self.apply(state, block_context)?;
         let (fee_transfer_info, actual_fee) = (None, 0);
+        tx_exec_info.set_fee_info(actual_fee, fee_transfer_info);
 
-        Ok(
-            TransactionExecutionInfo::from_concurrent_state_execution_info(
-                concurrent_exec_info,
-                actual_fee,
-                fee_transfer_info,
-            ),
-        )
+        Ok(tx_exec_info)
     }
 
     // ---------------
     //   Simulation
     // ---------------
+
+    /// Creates a Deploy transaction for simulate a deploy
     pub(crate) fn create_for_simulation(
         &self,
         skip_validate: bool,
@@ -255,7 +316,7 @@ impl Deploy {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs::File, io::BufReader};
+    use std::{collections::HashMap, sync::Arc};
 
     use super::*;
     use crate::{
@@ -266,34 +327,33 @@ mod tests {
     #[test]
     fn invoke_constructor_test() {
         // Instantiate CachedState
-        let state_reader = InMemoryStateReader::default();
+        let state_reader = Arc::new(InMemoryStateReader::default());
         let mut state = CachedState::new(state_reader, Some(Default::default()), None);
 
         // Set contract_class
-        let contract_reader =
-            BufReader::new(File::open("starknet_programs/constructor.json").unwrap());
-        let contract_class = ContractClass::try_from(contract_reader).unwrap();
+        let contract_class =
+            ContractClass::from_path("starknet_programs/constructor.json").unwrap();
         let class_hash: Felt252 = compute_deprecated_class_hash(&contract_class).unwrap();
         //transform class_hash to [u8; 32]
         let class_hash_bytes = class_hash.to_be_bytes();
 
-        state
-            .set_contract_class(&class_hash_bytes, &contract_class)
-            .unwrap();
-
         let internal_deploy = Deploy::new(
             0.into(),
-            contract_class,
+            contract_class.clone(),
             vec![10.into()],
             0.into(),
             0.into(),
-            None,
         )
         .unwrap();
 
         let block_context = Default::default();
 
         let _result = internal_deploy.apply(&mut state, &block_context).unwrap();
+
+        assert_eq!(
+            state.get_contract_class(&class_hash_bytes).unwrap(),
+            CompiledClass::Deprecated(Arc::new(contract_class))
+        );
 
         assert_eq!(
             state
@@ -315,13 +375,11 @@ mod tests {
     #[test]
     fn invoke_constructor_no_calldata_should_fail() {
         // Instantiate CachedState
-        let state_reader = InMemoryStateReader::default();
+        let state_reader = Arc::new(InMemoryStateReader::default());
         let mut state = CachedState::new(state_reader, Some(Default::default()), None);
 
-        // Set contract_class
-        let contract_reader =
-            BufReader::new(File::open("starknet_programs/constructor.json").unwrap());
-        let contract_class = ContractClass::try_from(contract_reader).unwrap();
+        let contract_class =
+            ContractClass::from_path("starknet_programs/constructor.json").unwrap();
 
         let class_hash: Felt252 = compute_deprecated_class_hash(&contract_class).unwrap();
         //transform class_hash to [u8; 32]
@@ -331,15 +389,8 @@ mod tests {
             .set_contract_class(&class_hash_bytes, &contract_class)
             .unwrap();
 
-        let internal_deploy = Deploy::new(
-            0.into(),
-            contract_class,
-            Vec::new(),
-            0.into(),
-            0.into(),
-            None,
-        )
-        .unwrap();
+        let internal_deploy =
+            Deploy::new(0.into(), contract_class, Vec::new(), 0.into(), 0.into()).unwrap();
 
         let block_context = Default::default();
 
@@ -350,11 +401,11 @@ mod tests {
     #[test]
     fn deploy_contract_without_constructor_should_fail() {
         // Instantiate CachedState
-        let state_reader = InMemoryStateReader::default();
+        let state_reader = Arc::new(InMemoryStateReader::default());
         let mut state = CachedState::new(state_reader, Some(Default::default()), None);
 
-        let contract_reader = BufReader::new(File::open("starknet_programs/amm.json").unwrap());
-        let contract_class = ContractClass::try_from(contract_reader).unwrap();
+        let contract_path = "starknet_programs/amm.json";
+        let contract_class = ContractClass::from_path(contract_path).unwrap();
 
         let class_hash: Felt252 = compute_deprecated_class_hash(&contract_class).unwrap();
         //transform class_hash to [u8; 32]
@@ -371,7 +422,6 @@ mod tests {
             vec![10.into()],
             0.into(),
             0.into(),
-            None,
         )
         .unwrap();
 
@@ -386,13 +436,13 @@ mod tests {
 
     #[test]
     fn internal_deploy_computing_classhash_should_fail() {
-        let contract_json = BufReader::new(File::open("starknet_programs/amm.json").unwrap());
+        let contract_path = "starknet_programs/amm.json";
         // Take a contrat class to copy the program
-        let contract_class = ContractClass::try_from(contract_json).unwrap();
+        let contract_class = ContractClass::from_path(contract_path).unwrap();
 
         // Make a new contract class with the same program but with errors
         let error_contract_class = ContractClass {
-            program_json: contract_class.program_json,
+            hinted_class_hash: contract_class.hinted_class_hash,
             program: contract_class.program,
             entry_points_by_type: HashMap::new(),
             abi: None,
@@ -405,11 +455,10 @@ mod tests {
             Vec::new(),
             0.into(),
             1.into(),
-            None,
         );
         assert_matches!(
             internal_deploy_error.unwrap_err(),
-            SyscallHandlerError::ErrorComputingHash
+            SyscallHandlerError::HashError(HashError::FailedToComputeHash(_))
         )
     }
 }

@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::{Path, PathBuf},
-    vec,
+    sync::Arc,
 };
 
 use cairo_lang_starknet::casm_contract_class::CasmContractClass;
@@ -11,7 +10,7 @@ use cairo_vm::{
 };
 use num_bigint::BigUint;
 use num_traits::{Num, One, Zero};
-use starknet_contract_class::EntryPointType;
+use starknet_in_rust::EntryPointType;
 use starknet_in_rust::{
     definitions::{block_context::BlockContext, constants::TRANSACTION_VERSION},
     execution::{
@@ -25,6 +24,25 @@ use starknet_in_rust::{
     state::{in_memory_state_reader::InMemoryStateReader, ExecutionResourcesManager},
     utils::{Address, ClassHash},
 };
+
+fn create_execute_extrypoint(
+    address: Address,
+    class_hash: ClassHash,
+    selector: &BigUint,
+    calldata: Vec<Felt252>,
+    entry_point_type: EntryPointType,
+) -> ExecutionEntryPoint {
+    ExecutionEntryPoint::new(
+        address,
+        calldata,
+        Felt252::new(selector.clone()),
+        Address(0000.into()),
+        entry_point_type,
+        Some(CallType::Delegate),
+        Some(class_hash),
+        100000000,
+    )
+}
 
 #[test]
 fn storage_write_read() {
@@ -57,7 +75,7 @@ fn storage_write_read() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     let block_context = BlockContext::default();
     let mut tx_execution_context = TransactionExecutionContext::new(
@@ -72,26 +90,12 @@ fn storage_write_read() {
 
     let mut resources_manager = ExecutionResourcesManager::default();
 
-    let create_execute_extrypoint = |selector: &BigUint,
-                                     calldata: Vec<Felt252>,
-                                     entry_point_type: EntryPointType|
-     -> ExecutionEntryPoint {
-        ExecutionEntryPoint::new(
-            address.clone(),
-            calldata,
-            Felt252::new(selector.clone()),
-            Address(0000.into()),
-            entry_point_type,
-            Some(CallType::Delegate),
-            Some(class_hash),
-            100000,
-        )
-    };
-
     // RUN CONSTRUCTOR
     // Create an execution entry point
     let calldata = [25.into()].to_vec();
     let constructor_exec_entry_point = create_execute_extrypoint(
+        address.clone(),
+        class_hash,
         constructor_entrypoint_selector,
         calldata,
         EntryPointType::Constructor,
@@ -105,7 +109,7 @@ fn storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
@@ -113,6 +117,8 @@ fn storage_write_read() {
     // Create an execution entry point
     let calldata = [].to_vec();
     let get_balance_exec_entry_point = create_execute_extrypoint(
+        address.clone(),
+        class_hash,
         get_balance_entrypoint_selector,
         calldata,
         EntryPointType::External,
@@ -126,15 +132,17 @@ fn storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(call_info.retdata, [25.into()]);
+    assert_eq!(call_info.call_info.unwrap().retdata, [25.into()]);
 
     // RUN INCREASE_BALANCE
     // Create an execution entry point
     let calldata = [100.into()].to_vec();
     let increase_balance_entry_point = create_execute_extrypoint(
+        address.clone(),
+        class_hash,
         increase_balance_entrypoint_selector,
         calldata,
         EntryPointType::External,
@@ -148,7 +156,7 @@ fn storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
@@ -156,6 +164,8 @@ fn storage_write_read() {
     // Create an execution entry point
     let calldata = [].to_vec();
     let get_balance_exec_entry_point = create_execute_extrypoint(
+        address,
+        class_hash,
         get_balance_entrypoint_selector,
         calldata,
         EntryPointType::External,
@@ -169,10 +179,10 @@ fn storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(call_info.retdata, [125.into()])
+    assert_eq!(call_info.call_info.unwrap().retdata, [125.into()])
 }
 
 #[test]
@@ -225,7 +235,7 @@ fn library_call() {
         .insert(lib_address, lib_nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [25.into(), Felt252::from_bytes_be(&lib_class_hash)].to_vec();
@@ -260,7 +270,7 @@ fn library_call() {
         n_steps: 255,
         #[cfg(feature = "cairo_1_tests")]
         n_steps: 259,
-        n_memory_holes: 10,
+        n_memory_holes: 8,
         builtin_instance_counter: HashMap::from([(RANGE_CHECK_BUILTIN_NAME.to_string(), 12)]),
     };
     let expected_execution_resources_internal_call = ExecutionResources {
@@ -268,7 +278,7 @@ fn library_call() {
         n_steps: 84,
         #[cfg(feature = "cairo_1_tests")]
         n_steps: 85,
-        n_memory_holes: 6,
+        n_memory_holes: 5,
         builtin_instance_counter: HashMap::from([(RANGE_CHECK_BUILTIN_NAME.to_string(), 7)]),
     };
 
@@ -322,8 +332,10 @@ fn library_call() {
                 &mut resources_manager,
                 &mut tx_execution_context,
                 false,
-                false
+                block_context.invoke_tx_max_n_steps()
             )
+            .unwrap()
+            .call_info
             .unwrap(),
         expected_call_info
     );
@@ -389,7 +401,7 @@ fn call_contract_storage_write_read() {
         .insert(simple_wallet_address.clone(), simple_wallet_nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     let block_context = BlockContext::default();
     let mut tx_execution_context = TransactionExecutionContext::new(
@@ -441,7 +453,7 @@ fn call_contract_storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
@@ -464,10 +476,10 @@ fn call_contract_storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(call_info.retdata, [25.into()]);
+    assert_eq!(call_info.call_info.unwrap().retdata, [25.into()]);
 
     // RUN INCREASE_BALANCE
     // Create an execution entry point
@@ -488,7 +500,7 @@ fn call_contract_storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
@@ -511,10 +523,10 @@ fn call_contract_storage_write_read() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(call_info.retdata, [125.into()])
+    assert_eq!(call_info.call_info.unwrap().retdata, [125.into()])
 }
 
 #[test]
@@ -545,7 +557,7 @@ fn emit_event() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [].to_vec();
@@ -582,11 +594,11 @@ fn emit_event() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
     assert_eq!(
-        call_info.events,
+        call_info.call_info.unwrap().events,
         vec![
             OrderedEvent {
                 order: 0,
@@ -659,7 +671,7 @@ fn deploy_cairo1_from_cairo1() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // arguments of deploy contract
     let calldata: Vec<_> = [test_felt_hash, salt].to_vec();
@@ -699,7 +711,7 @@ fn deploy_cairo1_from_cairo1() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
-        false,
+        block_context.invoke_tx_max_n_steps(),
     );
 
     assert!(call_info.is_ok());
@@ -710,7 +722,7 @@ fn deploy_cairo1_from_cairo1() {
 
     let ret_class_hash = state.get_class_hash_at(&ret_address).unwrap();
     let ret_casm_class = match state.get_contract_class(&ret_class_hash).unwrap() {
-        CompiledClass::Casm(class) => *class,
+        CompiledClass::Casm(class) => class.as_ref().clone(),
         CompiledClass::Deprecated(_) => unreachable!(),
     };
 
@@ -723,9 +735,8 @@ fn deploy_cairo0_from_cairo1_without_constructor() {
     let test_class_hash: ClassHash = [2; 32];
     let test_felt_hash = Felt252::from_bytes_be(&test_class_hash);
     let salt = Felt252::zero();
-    let contract_path = Path::new("starknet_programs/fibonacci.json");
-    let test_contract_class: ContractClass =
-        ContractClass::try_from(contract_path.to_path_buf()).unwrap();
+    let contract_path = "starknet_programs/fibonacci.json";
+    let test_contract_class: ContractClass = ContractClass::from_path(contract_path).unwrap();
 
     // Create the deploy contract class
     #[cfg(not(feature = "cairo_1_tests"))]
@@ -759,7 +770,7 @@ fn deploy_cairo0_from_cairo1_without_constructor() {
 
     // Create state from the state_reader and contract cache.
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some(contract_class_cache),
         Some(casm_contract_class_cache),
     );
@@ -802,7 +813,7 @@ fn deploy_cairo0_from_cairo1_without_constructor() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
-        false,
+        block_context.invoke_tx_max_n_steps(),
     );
 
     assert!(call_info.is_ok());
@@ -813,7 +824,7 @@ fn deploy_cairo0_from_cairo1_without_constructor() {
 
     let ret_class_hash = state.get_class_hash_at(&ret_address).unwrap();
     let ret_casm_class = match state.get_contract_class(&ret_class_hash).unwrap() {
-        CompiledClass::Deprecated(class) => *class,
+        CompiledClass::Deprecated(class) => class.as_ref().clone(),
         CompiledClass::Casm(_) => unreachable!(),
     };
 
@@ -826,9 +837,8 @@ fn deploy_cairo0_from_cairo1_with_constructor() {
     let test_class_hash: ClassHash = [2; 32];
     let test_felt_hash = Felt252::from_bytes_be(&test_class_hash);
     let salt = Felt252::zero();
-    let contract_path = Path::new("starknet_programs/test_contract.json");
-    let test_contract_class: ContractClass =
-        ContractClass::try_from(contract_path.to_path_buf()).unwrap();
+    let contract_path = "starknet_programs/test_contract.json";
+    let test_contract_class: ContractClass = ContractClass::from_path(contract_path).unwrap();
 
     // Create the deploy contract class
     #[cfg(not(feature = "cairo_1_tests"))]
@@ -861,7 +871,7 @@ fn deploy_cairo0_from_cairo1_with_constructor() {
 
     // Create state from the state_reader and contract cache.
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some(contract_class_cache),
         Some(casm_contract_class_cache),
     );
@@ -904,7 +914,7 @@ fn deploy_cairo0_from_cairo1_with_constructor() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
-        false,
+        block_context.invoke_tx_max_n_steps(),
     );
 
     assert!(call_info.is_ok());
@@ -915,7 +925,7 @@ fn deploy_cairo0_from_cairo1_with_constructor() {
 
     let ret_class_hash = state.get_class_hash_at(&ret_address).unwrap();
     let ret_casm_class = match state.get_contract_class(&ret_class_hash).unwrap() {
-        CompiledClass::Deprecated(class) => *class,
+        CompiledClass::Deprecated(class) => class.as_ref().clone(),
         CompiledClass::Casm(_) => unreachable!(),
     };
 
@@ -928,9 +938,8 @@ fn deploy_cairo0_and_invoke() {
     let test_class_hash: ClassHash = [2; 32];
     let test_felt_hash = Felt252::from_bytes_be(&test_class_hash);
     let salt = Felt252::zero();
-    let contract_path = Path::new("starknet_programs/factorial.json");
-    let test_contract_class: ContractClass =
-        ContractClass::try_from(contract_path.to_path_buf()).unwrap();
+    let contract_path = "starknet_programs/factorial.json";
+    let test_contract_class: ContractClass = ContractClass::from_path(contract_path).unwrap();
 
     // Create the deploy contract class
     #[cfg(not(feature = "cairo_1_tests"))]
@@ -963,8 +972,8 @@ fn deploy_cairo0_and_invoke() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(
-        state_reader,
+    let mut state: CachedState<_> = CachedState::new(
+        Arc::new(state_reader),
         Some(contract_class_cache),
         Some(casm_contract_class_cache),
     );
@@ -1007,7 +1016,7 @@ fn deploy_cairo0_and_invoke() {
         &mut resources_manager,
         &mut tx_execution_context,
         false,
-        false,
+        block_context.invoke_tx_max_n_steps(),
     );
 
     assert!(call_info.is_ok());
@@ -1018,7 +1027,7 @@ fn deploy_cairo0_and_invoke() {
 
     let ret_class_hash = state.get_class_hash_at(&ret_address).unwrap();
     let ret_casm_class = match state.get_contract_class(&ret_class_hash).unwrap() {
-        CompiledClass::Deprecated(class) => *class,
+        CompiledClass::Deprecated(class) => class.as_ref().clone(),
         CompiledClass::Casm(_) => unreachable!(),
     };
 
@@ -1048,11 +1057,11 @@ fn deploy_cairo0_and_invoke() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
-    let retdata = call_info.retdata;
+    let retdata = call_info.call_info.unwrap().retdata;
 
     // expected result 3! = 6
     assert_eq!(retdata, [6.into()].to_vec());
@@ -1087,27 +1096,13 @@ fn test_send_message_to_l1_syscall() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
-
-    let create_execute_extrypoint = |selector: &BigUint,
-                                     calldata: Vec<Felt252>,
-                                     entry_point_type: EntryPointType|
-     -> ExecutionEntryPoint {
-        ExecutionEntryPoint::new(
-            address.clone(),
-            calldata,
-            Felt252::new(selector.clone()),
-            Address(0000.into()),
-            entry_point_type,
-            Some(CallType::Delegate),
-            Some(class_hash),
-            100000,
-        )
-    };
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // RUN SEND_MSG
     // Create an execution entry point
     let send_message_exec_entry_point = create_execute_extrypoint(
+        address.clone(),
+        class_hash,
         external_entrypoint_selector,
         vec![],
         EntryPointType::External,
@@ -1134,7 +1129,7 @@ fn test_send_message_to_l1_syscall() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
@@ -1146,14 +1141,14 @@ fn test_send_message_to_l1_syscall() {
 
     let expected_execution_resources = ExecutionResources {
         n_steps: 50,
-        n_memory_holes: 1,
+        n_memory_holes: 0,
         builtin_instance_counter: HashMap::from([(RANGE_CHECK_BUILTIN_NAME.to_string(), 2)]),
     };
 
     let expected_call_info = CallInfo {
         caller_address: Address(0.into()),
         call_type: Some(CallType::Delegate),
-        contract_address: address.clone(),
+        contract_address: address,
         class_hash: Some(class_hash),
         entry_point_selector: Some(external_entrypoint_selector.into()),
         entry_point_type: Some(EntryPointType::External),
@@ -1163,7 +1158,7 @@ fn test_send_message_to_l1_syscall() {
         ..Default::default()
     };
 
-    assert_eq!(call_info, expected_call_info);
+    assert_eq!(call_info.call_info.unwrap(), expected_call_info);
 }
 
 #[test]
@@ -1194,7 +1189,7 @@ fn test_get_execution_info() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     let block_context = BlockContext::default();
     let mut tx_execution_context = TransactionExecutionContext::new(
@@ -1209,25 +1204,11 @@ fn test_get_execution_info() {
 
     let mut resources_manager = ExecutionResourcesManager::default();
 
-    let create_execute_extrypoint = |selector: &BigUint,
-                                     calldata: Vec<Felt252>,
-                                     entry_point_type: EntryPointType|
-     -> ExecutionEntryPoint {
-        ExecutionEntryPoint::new(
-            address.clone(),
-            calldata,
-            Felt252::new(selector.clone()),
-            Address(0000.into()),
-            entry_point_type,
-            Some(CallType::Delegate),
-            Some(class_hash),
-            100000,
-        )
-    };
-
     // RUN GET_INFO
     // Create an execution entry point
     let get_info_exec_entry_point = create_execute_extrypoint(
+        address.clone(),
+        class_hash,
         external_entrypoint_selector,
         vec![],
         EntryPointType::External,
@@ -1241,7 +1222,7 @@ fn test_get_execution_info() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
@@ -1254,14 +1235,14 @@ fn test_get_execution_info() {
 
     let expected_execution_resources = ExecutionResources {
         n_steps: 268,
-        n_memory_holes: 5,
+        n_memory_holes: 4,
         builtin_instance_counter: HashMap::from([(RANGE_CHECK_BUILTIN_NAME.to_string(), 4)]),
     };
 
     let expected_call_info = CallInfo {
         caller_address: Address(0.into()),
         call_type: Some(CallType::Delegate),
-        contract_address: address.clone(),
+        contract_address: address,
         class_hash: Some(class_hash),
         entry_point_selector: Some(external_entrypoint_selector.into()),
         entry_point_type: Some(EntryPointType::External),
@@ -1271,7 +1252,7 @@ fn test_get_execution_info() {
         ..Default::default()
     };
 
-    assert_eq!(call_info, expected_call_info);
+    assert_eq!(call_info.call_info.unwrap(), expected_call_info);
 }
 
 #[test]
@@ -1314,7 +1295,7 @@ fn replace_class_internal() {
     contract_class_cache.insert(class_hash_b, contract_class_b.clone());
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Run upgrade entrypoint and check that the storage was updated with the new contract class
     // Create an execution entry point
@@ -1353,7 +1334,7 @@ fn replace_class_internal() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
     // Check that the class was indeed replaced in storage
@@ -1361,7 +1342,7 @@ fn replace_class_internal() {
     // Check that the class_hash_b leads to contract_class_b for soundness
     assert_eq!(
         state.get_contract_class(&class_hash_b).unwrap(),
-        CompiledClass::Casm(Box::new(contract_class_b))
+        CompiledClass::Casm(Arc::new(contract_class_b))
     );
 }
 
@@ -1436,7 +1417,7 @@ fn replace_class_contract_call() {
         .insert(wrapper_address, nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // INITIALIZE STARKNET CONFIG
     let block_context = BlockContext::default();
@@ -1475,10 +1456,10 @@ fn replace_class_contract_call() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(result.retdata, vec![25.into()]);
+    assert_eq!(result.call_info.unwrap().retdata, vec![25.into()]);
 
     // REPLACE_CLASS
 
@@ -1502,7 +1483,7 @@ fn replace_class_contract_call() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
@@ -1528,10 +1509,10 @@ fn replace_class_contract_call() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(result.retdata, vec![17.into()]);
+    assert_eq!(result.call_info.unwrap().retdata, vec![17.into()]);
 }
 
 #[test]
@@ -1602,7 +1583,7 @@ fn replace_class_contract_call_same_transaction() {
         .insert(wrapper_address, nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // INITIALIZE STARKNET CONFIG
     let block_context = BlockContext::default();
@@ -1641,10 +1622,13 @@ fn replace_class_contract_call_same_transaction() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(result.retdata, vec![25.into(), 17.into()]);
+    assert_eq!(
+        result.call_info.unwrap().retdata,
+        vec![25.into(), 17.into()]
+    );
 }
 
 #[test]
@@ -1658,8 +1642,7 @@ fn call_contract_upgrade_cairo_0_to_cairo_1_same_transaction() {
 
     // Add get_number_a.cairo to storage
 
-    let path = PathBuf::from("starknet_programs/get_number_c.json");
-    let contract_class_c = ContractClass::try_from(path).unwrap();
+    let contract_class_c = ContractClass::from_path("starknet_programs/get_number_c.json").unwrap();
 
     // Create state reader with class hash data
     let mut casm_contract_class_cache = HashMap::new();
@@ -1716,7 +1699,7 @@ fn call_contract_upgrade_cairo_0_to_cairo_1_same_transaction() {
 
     // Create state from the state_reader and contract cache.
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some(deprecated_contract_class_cache),
         Some(casm_contract_class_cache),
     );
@@ -1758,10 +1741,13 @@ fn call_contract_upgrade_cairo_0_to_cairo_1_same_transaction() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(result.retdata, vec![33.into(), 17.into()]);
+    assert_eq!(
+        result.call_info.unwrap().retdata,
+        vec![33.into(), 17.into()]
+    );
 }
 
 #[test]
@@ -1773,8 +1759,7 @@ fn call_contract_downgrade_cairo_1_to_cairo_0_same_transaction() {
 
     // SET GET_NUMBER_C
     // Add get_number_a.cairo to the state (only its contract_class)
-    let path = PathBuf::from("starknet_programs/get_number_c.json");
-    let contract_class_c = ContractClass::try_from(path).unwrap();
+    let contract_class_c = ContractClass::from_path("starknet_programs/get_number_c.json").unwrap();
 
     // Create state reader with class hash data
     let mut casm_contract_class_cache = HashMap::new();
@@ -1831,7 +1816,7 @@ fn call_contract_downgrade_cairo_1_to_cairo_0_same_transaction() {
 
     // Create state from the state_reader and contract cache.
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some(deprecated_contract_class_cache),
         Some(casm_contract_class_cache),
     );
@@ -1873,10 +1858,13 @@ fn call_contract_downgrade_cairo_1_to_cairo_0_same_transaction() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(result.retdata, vec![17.into(), 33.into()]);
+    assert_eq!(
+        result.call_info.unwrap().retdata,
+        vec![17.into(), 33.into()]
+    );
 }
 
 #[test]
@@ -1888,8 +1876,7 @@ fn call_contract_replace_class_cairo_0() {
 
     // SET GET_NUMBER_C
     // Add get_number_a.cairo to the state (only its contract_class)
-    let path = PathBuf::from("starknet_programs/get_number_c.json");
-    let contract_class_c = ContractClass::try_from(path).unwrap();
+    let contract_class_c = ContractClass::from_path("starknet_programs/get_number_c.json").unwrap();
 
     // Create state reader with class hash data
     let mut casm_contract_class_cache = HashMap::new();
@@ -1905,8 +1892,7 @@ fn call_contract_replace_class_cairo_0() {
 
     // Add get_number_b contract to the state
 
-    let path = PathBuf::from("starknet_programs/get_number_d.json");
-    let contract_class_d = ContractClass::try_from(path).unwrap();
+    let contract_class_d = ContractClass::from_path("starknet_programs/get_number_d.json").unwrap();
 
     let class_hash_d: ClassHash = Felt252::from(2).to_be_bytes();
 
@@ -1943,7 +1929,7 @@ fn call_contract_replace_class_cairo_0() {
 
     // Create state from the state_reader and contract cache.
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some(deprecated_contract_class_cache),
         Some(casm_contract_class_cache),
     );
@@ -1985,10 +1971,13 @@ fn call_contract_replace_class_cairo_0() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    assert_eq!(result.retdata, vec![64.into(), 33.into()]);
+    assert_eq!(
+        result.call_info.unwrap().retdata,
+        vec![64.into(), 33.into()]
+    );
 }
 
 #[test]
@@ -2019,7 +2008,7 @@ fn test_out_of_gas_failure() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [].to_vec();
@@ -2057,9 +2046,10 @@ fn test_out_of_gas_failure() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
+    let call_info = call_info.call_info.unwrap();
     assert_eq!(
         call_info.retdata,
         vec![Felt252::from_bytes_be("Out of gas".as_bytes())]
@@ -2095,7 +2085,7 @@ fn deploy_syscall_failure_uninitialized_class_hash() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [Felt252::zero()].to_vec();
@@ -2132,11 +2122,11 @@ fn deploy_syscall_failure_uninitialized_class_hash() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
     assert_eq!(
-        std::str::from_utf8(&call_info.retdata[0].to_be_bytes())
+        std::str::from_utf8(&call_info.call_info.unwrap().retdata[0].to_be_bytes())
             .unwrap()
             .trim_start_matches('\0'),
         "CLASS_HASH_NOT_FOUND"
@@ -2180,7 +2170,7 @@ fn deploy_syscall_failure_in_constructor() {
     contract_class_cache.insert(f_c_class_hash.to_be_bytes(), f_c_contract_class);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [f_c_class_hash].to_vec();
@@ -2217,13 +2207,13 @@ fn deploy_syscall_failure_in_constructor() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
     // Check that we get the error from the constructor
     // assert( 1 == 0 , 'Oops');
     assert_eq!(
-        std::str::from_utf8(&call_info.retdata[0].to_be_bytes())
+        std::str::from_utf8(&call_info.call_info.unwrap().retdata[0].to_be_bytes())
             .unwrap()
             .trim_start_matches('\0'),
         "Oops"
@@ -2258,7 +2248,7 @@ fn storage_read_no_value() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     let block_context = BlockContext::default();
     let mut tx_execution_context = TransactionExecutionContext::new(
@@ -2273,26 +2263,12 @@ fn storage_read_no_value() {
 
     let mut resources_manager = ExecutionResourcesManager::default();
 
-    let create_execute_extrypoint = |selector: &BigUint,
-                                     calldata: Vec<Felt252>,
-                                     entry_point_type: EntryPointType|
-     -> ExecutionEntryPoint {
-        ExecutionEntryPoint::new(
-            address.clone(),
-            calldata,
-            Felt252::new(selector.clone()),
-            Address(0000.into()),
-            entry_point_type,
-            Some(CallType::Delegate),
-            Some(class_hash),
-            100000,
-        )
-    };
-
     // RUN GET_BALANCE
     // Create an execution entry point
     let calldata = [].to_vec();
     let get_balance_exec_entry_point = create_execute_extrypoint(
+        address,
+        class_hash,
         get_balance_entrypoint_selector,
         calldata,
         EntryPointType::External,
@@ -2306,11 +2282,11 @@ fn storage_read_no_value() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
     // As the value doesn't exist in storage, it's value will be 0
-    assert_eq!(call_info.retdata, [0.into()]);
+    assert_eq!(call_info.call_info.unwrap().retdata, [0.into()]);
 }
 
 #[test]
@@ -2343,7 +2319,7 @@ fn storage_read_unavailable_address_domain() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     let block_context = BlockContext::default();
     let mut tx_execution_context = TransactionExecutionContext::new(
@@ -2358,26 +2334,12 @@ fn storage_read_unavailable_address_domain() {
 
     let mut resources_manager = ExecutionResourcesManager::default();
 
-    let create_execute_extrypoint = |selector: &BigUint,
-                                     calldata: Vec<Felt252>,
-                                     entry_point_type: EntryPointType|
-     -> ExecutionEntryPoint {
-        ExecutionEntryPoint::new(
-            address.clone(),
-            calldata,
-            Felt252::new(selector.clone()),
-            Address(0000.into()),
-            entry_point_type,
-            Some(CallType::Delegate),
-            Some(class_hash),
-            100000,
-        )
-    };
-
     // RUN READ_STORAGE
     // Create an execution entry point
     let calldata = [].to_vec();
     let read_storage_exec_entry_point = create_execute_extrypoint(
+        address,
+        class_hash,
         read_storage_entrypoint_selector,
         calldata,
         EntryPointType::External,
@@ -2391,12 +2353,12 @@ fn storage_read_unavailable_address_domain() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
     assert_eq!(
-        call_info.retdata[0],
+        call_info.call_info.unwrap().retdata[0],
         Felt252::from_bytes_be(b"Unsupported address domain")
     );
 }
@@ -2431,7 +2393,7 @@ fn storage_write_unavailable_address_domain() {
         .insert(address.clone(), nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     let block_context = BlockContext::default();
     let mut tx_execution_context = TransactionExecutionContext::new(
@@ -2446,26 +2408,12 @@ fn storage_write_unavailable_address_domain() {
 
     let mut resources_manager = ExecutionResourcesManager::default();
 
-    let create_execute_extrypoint = |selector: &BigUint,
-                                     calldata: Vec<Felt252>,
-                                     entry_point_type: EntryPointType|
-     -> ExecutionEntryPoint {
-        ExecutionEntryPoint::new(
-            address.clone(),
-            calldata,
-            Felt252::new(selector.clone()),
-            Address(0000.into()),
-            entry_point_type,
-            Some(CallType::Delegate),
-            Some(class_hash),
-            100000,
-        )
-    };
-
     // RUN READ_STORAGE
     // Create an execution entry point
     let calldata = [].to_vec();
     let read_storage_exec_entry_point = create_execute_extrypoint(
+        address,
+        class_hash,
         read_storage_entrypoint_selector,
         calldata,
         EntryPointType::External,
@@ -2479,12 +2427,12 @@ fn storage_write_unavailable_address_domain() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
 
     assert_eq!(
-        call_info.retdata[0],
+        call_info.call_info.unwrap().retdata[0],
         Felt252::from_bytes_be(b"Unsupported address domain")
     );
 }
@@ -2537,7 +2485,7 @@ fn library_call_failure() {
         .insert(lib_address, lib_nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [25.into(), Felt252::from_bytes_be(&lib_class_hash)].to_vec();
@@ -2580,9 +2528,12 @@ fn library_call_failure() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
+
+    let call_info = call_info.call_info.unwrap();
+
     assert_eq!(
         std::str::from_utf8(&call_info.retdata[0].to_be_bytes())
             .unwrap()
@@ -2643,7 +2594,7 @@ fn send_messages_to_l1_different_contract_calls() {
         .insert(send_msg_address, send_msg_nonce);
 
     // Create state from the state_reader and contract cache.
-    let mut state = CachedState::new(state_reader, None, Some(contract_class_cache));
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
 
     // Create an execution entry point
     let calldata = [25.into(), 50.into(), 75.into()].to_vec();
@@ -2681,10 +2632,14 @@ fn send_messages_to_l1_different_contract_calls() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    let l1_to_l2_messages = call_info.get_sorted_l2_to_l1_messages().unwrap();
+    let l1_to_l2_messages = call_info
+        .call_info
+        .unwrap()
+        .get_sorted_l2_to_l1_messages()
+        .unwrap();
     assert_eq!(
         l1_to_l2_messages,
         vec![
@@ -2741,8 +2696,8 @@ fn send_messages_to_l1_different_contract_calls_cairo1_to_cairo0() {
 
     // Add send_message_to_l1 contract to the state
 
-    let path = PathBuf::from("starknet_programs/send_message_to_l1.json");
-    let send_msg_contract_class = ContractClass::try_from(path).unwrap();
+    let send_msg_contract_class =
+        ContractClass::from_path("starknet_programs/send_message_to_l1.json").unwrap();
 
     let send_msg_address = Address(1.into()); //Hardcoded in contract
     let send_msg_class_hash: ClassHash = [2; 32];
@@ -2758,7 +2713,7 @@ fn send_messages_to_l1_different_contract_calls_cairo1_to_cairo0() {
 
     // Create state from the state_reader and contract cache.
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some(deprecated_contract_class_cache),
         Some(contract_class_cache),
     );
@@ -2799,10 +2754,14 @@ fn send_messages_to_l1_different_contract_calls_cairo1_to_cairo0() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    let l1_to_l2_messages = call_info.get_sorted_l2_to_l1_messages().unwrap();
+    let l1_to_l2_messages = call_info
+        .call_info
+        .unwrap()
+        .get_sorted_l2_to_l1_messages()
+        .unwrap();
     assert_eq!(
         l1_to_l2_messages,
         vec![
@@ -2829,8 +2788,8 @@ fn send_messages_to_l1_different_contract_calls_cairo1_to_cairo0() {
 #[test]
 fn send_messages_to_l1_different_contract_calls_cairo0_to_cairo1() {
     //  Create program and entry point types for contract class
-    let path = PathBuf::from("starknet_programs/send_messages_contract_call.json");
-    let contract_class = ContractClass::try_from(path).unwrap();
+    let contract_class =
+        ContractClass::from_path("starknet_programs/send_messages_contract_call.json").unwrap();
     let entrypoint_selector = &contract_class.entry_points_by_type()[&EntryPointType::External][0]
         .selector()
         .to_owned();
@@ -2874,7 +2833,7 @@ fn send_messages_to_l1_different_contract_calls_cairo0_to_cairo1() {
 
     // Create state from the state_reader and contract cache.
     let mut state = CachedState::new(
-        state_reader,
+        Arc::new(state_reader),
         Some(deprecated_contract_class_cache),
         Some(contract_class_cache),
     );
@@ -2915,10 +2874,14 @@ fn send_messages_to_l1_different_contract_calls_cairo0_to_cairo1() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false,
+            block_context.invoke_tx_max_n_steps(),
         )
         .unwrap();
-    let l1_to_l2_messages = call_info.get_sorted_l2_to_l1_messages().unwrap();
+    let l1_to_l2_messages = call_info
+        .call_info
+        .unwrap()
+        .get_sorted_l2_to_l1_messages()
+        .unwrap();
     assert_eq!(
         l1_to_l2_messages,
         vec![
@@ -2940,4 +2903,72 @@ fn send_messages_to_l1_different_contract_calls_cairo0_to_cairo1() {
             )
         ],
     )
+}
+
+#[test]
+#[cfg(not(feature = "cairo_1_tests"))]
+fn keccak_syscall() {
+    let program_data = include_bytes!("../starknet_programs/keccak/test_cairo_keccak.casm");
+    let contract_class: CasmContractClass = serde_json::from_slice(program_data).unwrap();
+    let entrypoints = contract_class.clone().entry_points_by_type;
+    let read_storage_entrypoint_selector = &entrypoints.external.get(0).unwrap().selector;
+
+    // Create state reader with class hash data
+    let mut contract_class_cache = HashMap::new();
+
+    let address = Address(1111.into());
+    let class_hash: ClassHash = [1; 32];
+    let nonce = Felt252::zero();
+
+    contract_class_cache.insert(class_hash, contract_class);
+    let mut state_reader = InMemoryStateReader::default();
+    state_reader
+        .address_to_class_hash_mut()
+        .insert(address.clone(), class_hash);
+    state_reader
+        .address_to_nonce_mut()
+        .insert(address.clone(), nonce);
+
+    // Create state from the state_reader and contract cache.
+    let mut state = CachedState::new(Arc::new(state_reader), None, Some(contract_class_cache));
+
+    let block_context = BlockContext::default();
+    let mut tx_execution_context = TransactionExecutionContext::new(
+        Address(0.into()),
+        Felt252::zero(),
+        Vec::new(),
+        0,
+        10.into(),
+        block_context.invoke_tx_max_n_steps(),
+        TRANSACTION_VERSION.clone(),
+    );
+
+    let mut resources_manager = ExecutionResourcesManager::default();
+
+    // RUN READ_STORAGE
+    // Create an execution entry point
+    let calldata = [].to_vec();
+    let read_storage_exec_entry_point = create_execute_extrypoint(
+        address,
+        class_hash,
+        read_storage_entrypoint_selector,
+        calldata,
+        EntryPointType::External,
+    );
+
+    // Run read_storage entrypoint
+    let call_info = read_storage_exec_entry_point
+        .execute(
+            &mut state,
+            &block_context,
+            &mut resources_manager,
+            &mut tx_execution_context,
+            false,
+            block_context.invoke_tx_max_n_steps(),
+        )
+        .unwrap();
+
+    let retdata = call_info.call_info.unwrap().retdata;
+
+    assert_eq!(retdata[0], Felt252::one());
 }

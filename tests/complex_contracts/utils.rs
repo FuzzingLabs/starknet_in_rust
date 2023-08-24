@@ -10,7 +10,8 @@ use starknet_in_rust::{
         constants::TRANSACTION_VERSION,
     },
     execution::{
-        execution_entry_point::ExecutionEntryPoint, CallInfo, CallType, TransactionExecutionContext,
+        execution_entry_point::{ExecutionEntryPoint, ExecutionResult},
+        CallInfo, CallType, TransactionExecutionContext,
     },
     services::api::contract_classes::deprecated_contract_class::ContractClass,
     state::{cached_state::CachedState, state_api::State},
@@ -18,11 +19,8 @@ use starknet_in_rust::{
     transaction::{error::TransactionError, Deploy},
     utils::{calculate_sn_keccak, Address},
 };
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::BufReader,
-};
+use starknet_in_rust::{ContractEntryPoint, EntryPointType};
+use std::collections::{HashMap, HashSet};
 
 pub struct CallConfig<'a> {
     pub state: &'a mut CachedState<InMemoryStateReader>,
@@ -121,13 +119,16 @@ pub fn execute_entry_point(
         TRANSACTION_VERSION.clone(),
     );
 
-    exec_entry_point.execute(
+    let ExecutionResult { call_info, .. } = exec_entry_point.execute(
         call_config.state,
         call_config.block_context,
         call_config.resources_manager,
         &mut tx_execution_context,
         false,
-    )
+        call_config.block_context.invoke_tx_max_n_steps(),
+    )?;
+
+    Ok(call_info.unwrap())
 }
 
 pub fn deploy(
@@ -137,17 +138,24 @@ pub fn deploy(
     block_context: &BlockContext,
     hash_value: Option<Felt252>,
 ) -> Result<(Address, [u8; 32]), TransactionError> {
-    let contract_reader = BufReader::new(File::open(path).unwrap());
-    let contract_class = ContractClass::try_from(contract_reader).unwrap();
+    let contract_class = ContractClass::from_path(path).unwrap();
 
-    let internal_deploy = Deploy::new(
-        0.into(),
-        contract_class.clone(),
-        calldata.to_vec(),
-        StarknetChainId::TestNet.to_felt(),
-        0.into(),
-        hash_value,
-    )?;
+    let internal_deploy = match hash_value {
+        None => Deploy::new(
+            0.into(),
+            contract_class.clone(),
+            calldata.to_vec(),
+            StarknetChainId::TestNet.to_felt(),
+            0.into(),
+        )?,
+        Some(hash_value) => Deploy::new_with_tx_hash(
+            0.into(),
+            contract_class.clone(),
+            calldata.to_vec(),
+            0.into(),
+            hash_value,
+        )?,
+    };
     let class_hash = internal_deploy.class_hash();
     state.set_contract_class(&class_hash, &contract_class)?;
 

@@ -1,8 +1,7 @@
 use cairo_vm::felt::Felt252;
 use cairo_vm::types::relocatable::{MaybeRelocatable, Relocatable};
 
-// TODO: remove once used.
-#[allow(dead_code)]
+/// Abstracts every response variant body for each syscall.
 pub(crate) enum ResponseBody {
     StorageReadResponse { value: Option<Felt252> },
     GetBlockNumber { number: Felt252 },
@@ -12,7 +11,9 @@ pub(crate) enum ResponseBody {
     GetBlockTimestamp(GetBlockTimestampResponse),
     GetExecutionInfo { exec_info_ptr: Relocatable },
     GetBlockHash(GetBlockHashResponse),
+    Keccak(KeccakResponse),
 }
+/// Wraps around any response body. It also contains the remaining gas after the execution.
 #[allow(unused)]
 pub(crate) struct SyscallResponse {
     /// The amount of gas left after the syscall execution.
@@ -22,6 +23,7 @@ pub(crate) struct SyscallResponse {
 }
 
 impl SyscallResponse {
+    /// Converts a response into cairo args for writing in memory.
     pub(crate) fn to_cairo_compatible_args(&self) -> Vec<MaybeRelocatable> {
         let mut cairo_args = Vec::<MaybeRelocatable>::with_capacity(5);
         cairo_args.push(Felt252::from(self.gas).into());
@@ -56,6 +58,13 @@ impl SyscallResponse {
             Some(ResponseBody::GetBlockHash(get_block_hash_response)) => {
                 cairo_args.push(get_block_hash_response.block_hash.clone().into())
             }
+            Some(ResponseBody::Keccak(KeccakResponse {
+                hash_low,
+                hash_high,
+            })) => {
+                cairo_args.push(hash_low.into());
+                cairo_args.push(hash_high.into());
+            }
             None => {}
         }
         cairo_args
@@ -66,32 +75,54 @@ impl SyscallResponse {
 //   Response objects
 // ----------------------
 
+/// Represents the response of get_block_timestamp syscall.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GetBlockTimestampResponse {
+    /// The block timestamp.
     pub timestamp: Felt252,
 }
 
+/// Represents the response of deploy syscall.
 pub struct DeployResponse {
+    /// Address of the deployed contract.
     pub contract_address: Felt252,
+    /// The retdata segment start.
     pub retdata_start: Relocatable,
+    /// The retdata segment end.
     pub retdata_end: Relocatable,
 }
 
+/// Represents error data of any syscall response.
 pub struct FailureReason {
+    /// The retdata segment start.
     pub retdata_start: Relocatable,
+    /// The retdata segment end.
     pub retdata_end: Relocatable,
     // Syscall specific response fields.
     // TODO: this cause circular dependency
     //pub(crate) body: Option<ResponseBody>,
 }
 
+/// Represents the response of call_contract syscall
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallContractResponse {
+    /// The retdata segment start.
     pub retdata_start: Relocatable,
+    /// The retdata segment end.
     pub retdata_end: Relocatable,
 }
 
+/// Represents the response of get_block_hash syscall
 #[derive(Clone, Debug, PartialEq)]
 pub struct GetBlockHashResponse {
+    /// The returned hash.
     pub block_hash: Felt252,
+}
+
+/// Represents the response of the `keccak` syscall
+#[derive(Clone, Debug, PartialEq)]
+pub struct KeccakResponse {
+    /// The returned hash.
+    pub hash_low: Felt252,
+    pub hash_high: Felt252,
 }

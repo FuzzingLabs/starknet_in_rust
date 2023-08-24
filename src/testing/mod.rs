@@ -1,8 +1,9 @@
+pub mod erc20;
 pub mod state;
 pub mod state_error;
 pub mod type_utils;
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, sync::Arc};
 
 use cairo_vm::felt::{felt_str, Felt252};
 use lazy_static::lazy_static;
@@ -40,7 +41,7 @@ lazy_static! {
     pub static ref TEST_CLASS_HASH: Felt252 = felt_str!("272");
     pub static ref TEST_EMPTY_CONTRACT_CLASS_HASH: Felt252 = felt_str!("274");
     pub static ref TEST_ERC20_CONTRACT_CLASS_HASH: Felt252 = felt_str!("4112");
-    pub static ref TEST_FIB_COMPILED_CONTRACT_CLASS_HASH: Felt252 = felt_str!("27727");
+    pub static ref TEST_FIB_COMPILED_CONTRACT_CLASS_HASH: Felt252 = felt_str!("1948962768849191111780391610229754715773924969841143100991524171924131413970");
 
     // Storage keys.
     pub static ref TEST_ERC20_ACCOUNT_BALANCE_KEY: Felt252 =
@@ -57,15 +58,15 @@ lazy_static! {
 
     // Others.
     // Blockifier had this value hardcoded to 2.
-    pub static ref ACTUAL_FEE: Felt252 = Felt252::zero();
+    pub static ref ACTUAL_FEE: Felt252 = Felt252::from(10000000);
 }
 
-pub fn new_starknet_general_config_for_testing() -> BlockContext {
+pub fn new_starknet_block_context_for_testing() -> BlockContext {
     BlockContext::new(
         StarknetOsConfig::new(
-            StarknetChainId::TestNet,
+            StarknetChainId::TestNet.to_felt(),
             TEST_ERC20_CONTRACT_ADDRESS.clone(),
-            0,
+            1,
         ),
         0,
         0,
@@ -78,16 +79,9 @@ pub fn new_starknet_general_config_for_testing() -> BlockContext {
     )
 }
 
-pub fn get_contract_class<P>(path: P) -> Result<ContractClass, Box<dyn std::error::Error>>
-where
-    P: Into<PathBuf>,
-{
-    Ok(ContractClass::try_from(path.into())?)
-}
-
 pub fn create_account_tx_test_state(
 ) -> Result<(BlockContext, CachedState<InMemoryStateReader>), Box<dyn std::error::Error>> {
-    let general_config = new_starknet_general_config_for_testing();
+    let block_context = new_starknet_block_context_for_testing();
 
     let test_contract_class_hash = felt_to_hash(&TEST_CLASS_HASH.clone());
     let test_account_contract_class_hash = felt_to_hash(&TEST_ACCOUNT_CONTRACT_CLASS_HASH.clone());
@@ -95,21 +89,21 @@ pub fn create_account_tx_test_state(
     let class_hash_to_class = HashMap::from([
         (
             test_account_contract_class_hash,
-            get_contract_class(ACCOUNT_CONTRACT_PATH)?,
+            ContractClass::from_path(ACCOUNT_CONTRACT_PATH)?,
         ),
         (
             test_contract_class_hash,
-            get_contract_class(TEST_CONTRACT_PATH)?,
+            ContractClass::from_path(TEST_CONTRACT_PATH)?,
         ),
         (
             test_erc20_class_hash,
-            get_contract_class(ERC20_CONTRACT_PATH)?,
+            ContractClass::from_path(ERC20_CONTRACT_PATH)?,
         ),
     ]);
 
     let test_contract_address = TEST_CONTRACT_ADDRESS.clone();
     let test_account_contract_address = TEST_ACCOUNT_CONTRACT_ADDRESS.clone();
-    let test_erc20_address = general_config
+    let test_erc20_address = block_context
         .starknet_os_config()
         .fee_token_address()
         .clone();
@@ -159,11 +153,11 @@ pub fn create_account_tx_test_state(
                     .class_hash_to_contract_class_mut()
                     .insert(class_hash, contract_class);
             }
-            state_reader
+            Arc::new(state_reader)
         },
         Some(HashMap::new()),
         Some(HashMap::new()),
     );
 
-    Ok((general_config, cached_state))
+    Ok((block_context, cached_state))
 }

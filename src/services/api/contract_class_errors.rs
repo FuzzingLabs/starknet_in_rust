@@ -1,4 +1,4 @@
-use starknet_contract_class::ContractEntryPoint;
+use crate::services::api::contract_classes::deprecated_contract_class::ContractEntryPoint;
 use thiserror::Error;
 
 #[derive(Debug, PartialEq, Eq, Error)]
@@ -13,4 +13,8 @@ pub enum ContractClassError {
     NotACasmContractClass,
     #[error("Not a deprecated contract class")]
     NotADeprecatedContractClass,
+    #[error("Parse error")]
+    ParseError,
+    #[error("Program error: {0}")]
+    ProgramError(String),
 }

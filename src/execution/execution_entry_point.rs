@@ -1,3 +1,10 @@
+use std::sync::Arc;
+
+use crate::services::api::contract_classes::deprecated_contract_class::{
+    ContractEntryPoint, EntryPointType,
+};
+use crate::state::cached_state::CachedState;
+use crate::state::StateDiff;
 use crate::{
     definitions::{block_context::BlockContext, constants::DEFAULT_ENTRY_POINT_SELECTOR},
     runner::StarknetRunner,
@@ -28,15 +35,20 @@ use cairo_vm::{
     },
     vm::{
         runners::cairo_runner::{CairoArg, CairoRunner, ExecutionResources, RunResources},
-        trace::trace_entry::TraceEntry,
         vm_core::VirtualMachine,
     },
 };
-use starknet_contract_class::{ContractEntryPoint, EntryPointType};
 
 use super::{
     CallInfo, CallResult, CallType, OrderedEvent, OrderedL2ToL1Message, TransactionExecutionContext,
 };
+
+#[derive(Debug, Default)]
+pub struct ExecutionResult {
+    pub call_info: Option<CallInfo>,
+    pub revert_error: Option<String>,
+    pub n_reverted_steps: usize,
+}
 
 /// Represents a Cairo entry point execution of a StarkNet contract.
 
@@ -51,7 +63,6 @@ pub struct ExecutionEntryPoint {
     pub(crate) caller_address: Address,
     pub(crate) entry_point_selector: Felt252,
     pub(crate) entry_point_type: EntryPointType,
-    #[allow(unused)]
     pub(crate) initial_gas: u128,
 }
 #[allow(clippy::too_many_arguments)]
@@ -85,15 +96,15 @@ impl ExecutionEntryPoint {
     /// Returns a CallInfo object that represents the execution.
     pub fn execute<T>(
         &self,
-        state: &mut T,
+        state: &mut CachedState<T>,
         block_context: &BlockContext,
         resources_manager: &mut ExecutionResourcesManager,
         tx_execution_context: &mut TransactionExecutionContext,
         support_reverted: bool,
-        enable_trace: bool,
-    ) -> Result<CallInfo, TransactionError>
+        max_steps: u64,
+    ) -> Result<ExecutionResult, TransactionError>
     where
-        T: State + StateReader,
+        T: StateReader,
     {
         // lookup the compiled class from the state.
         let class_hash = self.get_code_class_hash(state)?;
@@ -101,25 +112,62 @@ impl ExecutionEntryPoint {
             .get_contract_class(&class_hash)
             .map_err(|_| TransactionError::MissingCompiledClass)?;
         match contract_class {
-            CompiledClass::Deprecated(contract_class) => self._execute_version0_class(
-                state,
-                resources_manager,
-                block_context,
-                tx_execution_context,
-                contract_class,
-                class_hash,
-                enable_trace,
-            ),
-            CompiledClass::Casm(contract_class) => self._execute(
-                state,
-                resources_manager,
-                block_context,
-                tx_execution_context,
-                contract_class,
-                class_hash,
-                support_reverted,
-                enable_trace,
-            ),
+            CompiledClass::Deprecated(contract_class) => {
+                let call_info = self._execute_version0_class(
+                    state,
+                    resources_manager,
+                    block_context,
+                    tx_execution_context,
+                    contract_class,
+                    class_hash,
+                )?;
+                Ok(ExecutionResult {
+                    call_info: Some(call_info),
+                    revert_error: None,
+                    n_reverted_steps: 0,
+                })
+            }
+            CompiledClass::Casm(contract_class) => {
+                let mut tmp_state = CachedState::new(
+                    state.state_reader.clone(),
+                    state.contract_classes.clone(),
+                    state.casm_contract_classes.clone(),
+                );
+                tmp_state.cache = state.cache.clone();
+
+                match self._execute(
+                    &mut tmp_state,
+                    resources_manager,
+                    block_context,
+                    tx_execution_context,
+                    contract_class,
+                    class_hash,
+                    support_reverted,
+                ) {
+                    Ok(call_info) => {
+                        let state_diff = StateDiff::from_cached_state(tmp_state)?;
+                        state.apply_state_update(&state_diff)?;
+                        Ok(ExecutionResult {
+                            call_info: Some(call_info),
+                            revert_error: None,
+                            n_reverted_steps: 0,
+                        })
+                    }
+                    Err(e) => {
+                        if !support_reverted {
+                            return Err(e);
+                        }
+
+                        let n_reverted_steps =
+                            (max_steps as usize) - resources_manager.cairo_usage.n_steps;
+                        Ok(ExecutionResult {
+                            call_info: None,
+                            revert_error: Some(e.to_string()),
+                            n_reverted_steps,
+                        })
+                    }
+                }
+            }
         }
     }
 
@@ -187,7 +235,7 @@ impl ExecutionEntryPoint {
             .ok_or(TransactionError::EntryPointNotFound)
     }
 
-    fn build_call_info_deprecated<S>(
+    fn build_call_info_deprecated<S: StateReader>(
         &self,
         previous_cairo_usage: ExecutionResources,
         resources_manager: &ExecutionResourcesManager,
@@ -196,23 +244,9 @@ impl ExecutionEntryPoint {
         l2_to_l1_messages: Vec<OrderedL2ToL1Message>,
         internal_calls: Vec<CallInfo>,
         retdata: Vec<Felt252>,
-        trace: &Vec<TraceEntry>,
-    ) -> Result<CallInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
+    ) -> Result<CallInfo, TransactionError> {
         let execution_resources = &resources_manager.cairo_usage - &previous_cairo_usage;
-        let mut vec_trace: Vec<(u32, u32)> = vec![];
-        for tr in trace {
-            vec_trace.push((
-                tr.pc
-                    .try_into()
-                    .expect("Failed to transform offset into u32"),
-                tr.fp
-                    .try_into()
-                    .expect("Failed to transform offset into u32"),
-            ));
-        }
+
         Ok(CallInfo {
             caller_address: self.caller_address.clone(),
             call_type: Some(self.call_type.clone()),
@@ -231,11 +265,10 @@ impl ExecutionEntryPoint {
             internal_calls,
             failure_flag: false,
             gas_consumed: 0,
-            trace: vec_trace,
         })
     }
 
-    fn build_call_info<S>(
+    fn build_call_info<S: StateReader>(
         &self,
         previous_cairo_usage: ExecutionResources,
         resources_manager: &ExecutionResourcesManager,
@@ -244,21 +277,9 @@ impl ExecutionEntryPoint {
         l2_to_l1_messages: Vec<OrderedL2ToL1Message>,
         internal_calls: Vec<CallInfo>,
         call_result: CallResult,
-        trace: &Vec<TraceEntry>,
-    ) -> Result<CallInfo, TransactionError>
-    where
-        S: State + StateReader,
-    {
+    ) -> Result<CallInfo, TransactionError> {
         let execution_resources = &resources_manager.cairo_usage - &previous_cairo_usage;
-        let mut vec_trace: Vec<(u32, u32)> = vec![];
-        for t in trace {
-            vec_trace.push((
-                t.pc.try_into()
-                    .expect("Failed to transform offset into u32"),
-                t.fp.try_into()
-                    .expect("Failed to transform offset into u32"),
-            ));
-        }
+
         Ok(CallInfo {
             caller_address: self.caller_address.clone(),
             call_type: Some(self.call_type.clone()),
@@ -281,15 +302,11 @@ impl ExecutionEntryPoint {
             internal_calls,
             failure_flag: !call_result.is_success,
             gas_consumed: call_result.gas_consumed,
-            trace: vec_trace,
         })
     }
 
     /// Returns the hash of the executed contract class.
-    fn get_code_class_hash<S: StateReader>(
-        &self,
-        state: &mut S,
-    ) -> Result<[u8; 32], TransactionError> {
+    fn get_code_class_hash<S: State>(&self, state: &mut S) -> Result<[u8; 32], TransactionError> {
         if self.class_hash.is_some() {
             match self.call_type {
                 CallType::Delegate => return Ok(self.class_hash.unwrap()),
@@ -310,26 +327,22 @@ impl ExecutionEntryPoint {
         get_deployed_address_class_hash_at_address(state, &code_address.unwrap())
     }
 
-    fn _execute_version0_class<T>(
+    fn _execute_version0_class<S: StateReader>(
         &self,
-        state: &mut T,
+        state: &mut CachedState<S>,
         resources_manager: &mut ExecutionResourcesManager,
         block_context: &BlockContext,
         tx_execution_context: &mut TransactionExecutionContext,
-        contract_class: Box<ContractClass>,
+        contract_class: Arc<ContractClass>,
         class_hash: [u8; 32],
-        enable_trace: bool,
-    ) -> Result<CallInfo, TransactionError>
-    where
-        T: State + StateReader,
-    {
+    ) -> Result<CallInfo, TransactionError> {
         let previous_cairo_usage = resources_manager.cairo_usage.clone();
         // fetch selected entry point
         let entry_point = self.get_selected_entry_point_v0(&contract_class, class_hash)?;
 
         // create starknet runner
-        let mut vm = VirtualMachine::new(enable_trace);
-        let mut cairo_runner = CairoRunner::new(&contract_class.program, "all_cairo", false)?;
+        let mut vm = VirtualMachine::new(false);
+        let mut cairo_runner = CairoRunner::new(&contract_class.program, "starknet", false)?;
         cairo_runner.initialize_function_runner(&mut vm)?;
 
         validate_contract_deployed(state, &self.contract_address)?;
@@ -337,7 +350,7 @@ impl ExecutionEntryPoint {
         // prepare OS context
         //let os_context = runner.prepare_os_context();
         let os_context =
-            StarknetRunner::<DeprecatedSyscallHintProcessor<T>>::prepare_os_context_cairo0(
+            StarknetRunner::<DeprecatedSyscallHintProcessor<S>>::prepare_os_context_cairo0(
                 &cairo_runner,
                 &mut vm,
             );
@@ -407,8 +420,8 @@ impl ExecutionEntryPoint {
         resources_manager.cairo_usage += &runner.get_execution_resources()?;
 
         let retdata = runner.get_return_values()?;
-        let trace = runner.vm.get_trace();
-        self.build_call_info_deprecated::<T>(
+
+        self.build_call_info_deprecated::<S>(
             previous_cairo_usage,
             resources_manager,
             runner.hint_processor.syscall_handler.starknet_storage_state,
@@ -416,35 +429,30 @@ impl ExecutionEntryPoint {
             runner.hint_processor.syscall_handler.l2_to_l1_messages,
             runner.hint_processor.syscall_handler.internal_calls,
             retdata,
-            trace,
         )
     }
 
-    fn _execute<T>(
+    fn _execute<S: StateReader>(
         &self,
-        state: &mut T,
+        state: &mut CachedState<S>,
         resources_manager: &mut ExecutionResourcesManager,
         block_context: &BlockContext,
         tx_execution_context: &mut TransactionExecutionContext,
-        contract_class: Box<CasmContractClass>,
+        contract_class: Arc<CasmContractClass>,
         class_hash: [u8; 32],
         support_reverted: bool,
-        enable_trace: bool,
-    ) -> Result<CallInfo, TransactionError>
-    where
-        T: State + StateReader,
-    {
+    ) -> Result<CallInfo, TransactionError> {
         let previous_cairo_usage = resources_manager.cairo_usage.clone();
 
         // fetch selected entry point
         let entry_point = self.get_selected_entry_point(&contract_class, class_hash)?;
 
         // create starknet runner
-        let mut vm = VirtualMachine::new(enable_trace);
+        let mut vm = VirtualMachine::new(false);
         // get a program from the casm contract class
         let program: Program = contract_class.as_ref().clone().try_into()?;
         // create and initialize a cairo runner for running cairo 1 programs.
-        let mut cairo_runner = CairoRunner::new(&program, "all_cairo", false)?;
+        let mut cairo_runner = CairoRunner::new(&program, "starknet", false)?;
 
         cairo_runner.initialize_function_runner_cairo_1(
             &mut vm,
@@ -452,7 +460,7 @@ impl ExecutionEntryPoint {
         )?;
         validate_contract_deployed(state, &self.contract_address)?;
         // prepare OS context
-        let os_context = StarknetRunner::<SyscallHintProcessor<T>>::prepare_os_context_cairo1(
+        let os_context = StarknetRunner::<SyscallHintProcessor<S>>::prepare_os_context_cairo1(
             &cairo_runner,
             &mut vm,
             self.initial_gas.into(),
@@ -529,6 +537,10 @@ impl ExecutionEntryPoint {
             Some(program.data_len() + program_extra_data.len()),
         )?;
 
+        runner
+            .vm
+            .mark_address_range_as_accessed(core_program_end_ptr, program_extra_data.len())?;
+
         runner.validate_and_process_os_context(os_context)?;
 
         // When execution starts the stack holds entry_points_args + [ret_fp, ret_pc].
@@ -559,8 +571,7 @@ impl ExecutionEntryPoint {
         resources_manager.cairo_usage += &runner.get_execution_resources()?;
 
         let call_result = runner.get_call_result(self.initial_gas)?;
-        let trace = runner.vm.get_trace();
-        self.build_call_info::<T>(
+        self.build_call_info::<S>(
             previous_cairo_usage,
             resources_manager,
             runner.hint_processor.syscall_handler.starknet_storage_state,
@@ -568,7 +579,6 @@ impl ExecutionEntryPoint {
             runner.hint_processor.syscall_handler.l2_to_l1_messages,
             runner.hint_processor.syscall_handler.internal_calls,
             call_result,
-            trace,
         )
     }
 }

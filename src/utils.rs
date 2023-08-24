@@ -1,21 +1,25 @@
+use crate::core::errors::hash_errors::HashError;
+use crate::definitions::constants::FEE_TRANSFER_N_STORAGE_CHANGES_TO_CHARGE;
+use crate::services::api::contract_classes::deprecated_contract_class::EntryPointType;
+use crate::state::state_api::State;
 use crate::{
     definitions::transaction_type::TransactionType,
     execution::{
         gas_usage::calculate_tx_gas_usage, os_usage::get_additional_os_resources, CallInfo,
     },
     state::ExecutionResourcesManager,
-    state::{
-        cached_state::UNINITIALIZED_CLASS_HASH, state_api::StateReader, state_cache::StorageEntry,
-    },
+    state::{cached_state::UNINITIALIZED_CLASS_HASH, state_cache::StorageEntry},
     syscalls::syscall_handler_errors::SyscallHandlerError,
     transaction::error::TransactionError,
 };
+use cairo_vm::vm::runners::builtin_runner::SEGMENT_ARENA_BUILTIN_NAME;
 use cairo_vm::{
     felt::Felt252, serde::deserialize_program::BuiltinName, vm::runners::builtin_runner,
 };
 use cairo_vm::{types::relocatable::Relocatable, vm::vm_core::VirtualMachine};
 use num_traits::{Num, ToPrimitive};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha3::{Digest, Keccak256};
 use starknet_contract_class::EntryPointType;
 use starknet_crypto::FieldElement;
@@ -96,7 +100,7 @@ pub fn get_felt_range(
 
 pub fn felt_to_field_element(value: &Felt252) -> Result<FieldElement, SyscallHandlerError> {
     FieldElement::from_dec_str(&value.to_str_radix(10))
-        .map_err(|_| SyscallHandlerError::FailToComputeHash)
+        .map_err(|e| SyscallHandlerError::HashError(HashError::FailedToComputeHash(e.to_string())))
 }
 
 pub fn field_element_to_felt(felt: &FieldElement) -> Felt252 {
@@ -166,6 +170,7 @@ pub fn calculate_tx_resources(
     tx_type: TransactionType,
     storage_changes: (usize, usize),
     l1_handler_payload_size: Option<usize>,
+    n_reverted_steps: usize,
 ) -> Result<HashMap<String, usize>, TransactionError> {
     let (n_modified_contracts, n_storage_changes) = storage_changes;
 
@@ -181,7 +186,7 @@ pub fn calculate_tx_resources(
     let l1_gas_usage = calculate_tx_gas_usage(
         l2_to_l1_messages,
         n_modified_contracts,
-        n_storage_changes,
+        n_storage_changes + FEE_TRANSFER_N_STORAGE_CHANGES_TO_CHARGE,
         l1_handler_payload_size,
         n_deployments,
     );
@@ -192,10 +197,21 @@ pub fn calculate_tx_resources(
     // Add additional Cairo resources needed for the OS to run the transaction.
     let additional_resources = get_additional_os_resources(tx_syscall_counter, &tx_type)?;
     let new_resources = &cairo_usage + &additional_resources;
-    let filtered_builtins = new_resources.filter_unused_builtins();
+    let mut filtered_builtins = new_resources.filter_unused_builtins();
+
+    let n_steps = new_resources.n_steps
+        + n_reverted_steps
+        + 10 * filtered_builtins
+            .builtin_instance_counter
+            .remove(SEGMENT_ARENA_BUILTIN_NAME)
+            .unwrap_or(0);
 
     let mut resources: HashMap<String, usize> = HashMap::new();
     resources.insert("l1_gas_usage".to_string(), l1_gas_usage);
+    resources.insert(
+        "n_steps".to_string(),
+        n_steps + filtered_builtins.n_memory_holes,
+    );
     for (builtin, value) in filtered_builtins.builtin_instance_counter {
         resources.insert(builtin, value);
     }
@@ -259,7 +275,7 @@ where
 //* Execution entry point utils
 //* ----------------------------
 
-pub fn get_deployed_address_class_hash_at_address<S: StateReader>(
+pub fn get_deployed_address_class_hash_at_address<S: State>(
     state: &mut S,
     contract_address: &Address,
 ) -> Result<ClassHash, TransactionError> {
@@ -269,12 +285,14 @@ pub fn get_deployed_address_class_hash_at_address<S: StateReader>(
         .to_owned();
 
     if class_hash == *UNINITIALIZED_CLASS_HASH {
-        return Err(TransactionError::NotDeployedContract(class_hash));
+        return Err(TransactionError::NotDeployedContract(felt_to_hash(
+            &contract_address.0,
+        )));
     }
     Ok(class_hash)
 }
 
-pub fn validate_contract_deployed<S: StateReader>(
+pub fn validate_contract_deployed<S: State>(
     state: &mut S,
     contract_address: &Address,
 ) -> Result<ClassHash, TransactionError> {
@@ -328,6 +346,21 @@ pub(crate) fn parse_builtin_names(
             s => Err(TransactionError::InvalidBuiltinContractClass(s.to_string())),
         })
         .collect()
+}
+
+/// Parses an array of strings representing Felt252 as hex
+pub fn parse_felt_array(felt_strings: &[Value]) -> Vec<Felt252> {
+    let mut felts = vec![];
+
+    for felt in felt_strings {
+        let felt_string = felt.as_str().unwrap();
+        felts.push(match felt_string.starts_with("0x") {
+            true => Felt252::parse_bytes(felt_string[2..].as_bytes(), 16).unwrap(),
+            false => Felt252::parse_bytes(felt_string.as_bytes(), 16).unwrap(),
+        })
+    }
+
+    felts
 }
 
 //* -------------------

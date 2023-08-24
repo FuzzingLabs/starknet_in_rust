@@ -1,5 +1,8 @@
 use crate::{
-    core::errors::{contract_address_errors::ContractAddressError, state_errors::StateError},
+    core::errors::{
+        contract_address_errors::ContractAddressError, hash_errors::HashError,
+        state_errors::StateError,
+    },
     definitions::transaction_type::TransactionType,
     execution::os_usage::OsResources,
     syscalls::syscall_handler_errors::SyscallHandlerError,
@@ -25,7 +28,9 @@ pub enum TransactionError {
     InvalidMaxFee,
     #[error("The nonce field in Declare transactions of version 0 must be 0.")]
     InvalidNonce,
-    #[error("The signature field in Declare transactions must be an empty list.")]
+    #[error("Couldn't convert from {0} to {1}")]
+    Conversion(String, String),
+    #[error("The signature field in Declare transactions of version 0 must be an empty list.")]
     InvalidSignature,
     #[error("An InvokeFunction transaction (version != 0) must have a nonce.")]
     InvokeFunctionNonZeroMissingNonce,
@@ -33,6 +38,10 @@ pub enum TransactionError {
     InvokeFunctionZeroHasNonce,
     #[error("Invalid transaction nonce. Expected: {0} got {1}")]
     InvalidTransactionNonce(String, String),
+    #[error("Actual fee exceeds max fee. Actual: {0}, Max: {1}")]
+    ActualFeeExceedsMaxFee(u128, u128),
+    #[error("Fee transfer failure: {0}")]
+    FeeTransferError(Box<TransactionError>),
     #[error("{0}")]
     FeeError(String),
     #[error("Cairo resource names must be contained in fee weights dict")]
@@ -43,6 +52,8 @@ pub enum TransactionError {
     ContractAddress(#[from] ContractAddressError),
     #[error(transparent)]
     Syscall(#[from] SyscallHandlerError),
+    #[error(transparent)]
+    HashError(#[from] HashError),
     #[error(transparent)]
     State(#[from] StateError),
     #[error("Calling other contracts during validate execution is forbidden")]
@@ -129,4 +140,8 @@ pub enum TransactionError {
     CustomError(String),
     #[error("call info is None")]
     CallInfoIsNone,
+    #[error("Unsupported version {0:?}")]
+    UnsupportedVersion(String),
+    #[error("Invalid compiled class, expected class hash: {0}, but received: {1}")]
+    InvalidCompiledClassHash(String, String),
 }

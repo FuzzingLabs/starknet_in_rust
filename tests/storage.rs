@@ -1,7 +1,7 @@
 use cairo_vm::felt::Felt252;
 use cairo_vm::vm::runners::cairo_runner::ExecutionResources;
 use num_traits::Zero;
-use starknet_contract_class::EntryPointType;
+use starknet_in_rust::EntryPointType;
 use starknet_in_rust::{
     definitions::{block_context::BlockContext, constants::TRANSACTION_VERSION},
     execution::{
@@ -12,6 +12,7 @@ use starknet_in_rust::{
     state::{in_memory_state_reader::InMemoryStateReader, ExecutionResourcesManager},
     utils::{calculate_sn_keccak, Address},
 };
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -24,7 +25,7 @@ fn integration_storage_test() {
     // ---------------------------------------------------------
 
     let path = PathBuf::from("starknet_programs/storage.json");
-    let contract_class = ContractClass::try_from(path).unwrap();
+    let contract_class = ContractClass::from_path(path).unwrap();
     let entry_points_by_type = contract_class.entry_points_by_type().clone();
 
     let storage_entrypoint_selector = entry_points_by_type
@@ -65,7 +66,7 @@ fn integration_storage_test() {
     //*    Create state with previous data
     //* ---------------------------------------
 
-    let mut state = CachedState::new(state_reader, Some(contract_class_cache), None);
+    let mut state = CachedState::new(Arc::new(state_reader), Some(contract_class_cache), None);
 
     //* ------------------------------------
     //*    Create execution entry point
@@ -132,8 +133,10 @@ fn integration_storage_test() {
                 &mut resources_manager,
                 &mut tx_execution_context,
                 false,
-                false
+                block_context.invoke_tx_max_n_steps()
             )
+            .unwrap()
+            .call_info
             .unwrap(),
         expected_call_info
     );

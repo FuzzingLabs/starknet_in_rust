@@ -1,10 +1,8 @@
 #![deny(warnings)]
 
-mod cairo_1_syscalls;
-
 use cairo_vm::felt::Felt252;
 use num_traits::{One, Zero};
-use starknet_contract_class::EntryPointType;
+use starknet_in_rust::EntryPointType;
 use starknet_in_rust::{
     definitions::{block_context::BlockContext, constants::TRANSACTION_VERSION},
     execution::{
@@ -15,6 +13,7 @@ use starknet_in_rust::{
     state::{in_memory_state_reader::InMemoryStateReader, ExecutionResourcesManager},
     utils::Address,
 };
+use std::sync::Arc;
 use std::{collections::HashMap, path::PathBuf};
 
 #[test]
@@ -29,7 +28,7 @@ fn delegate_call() {
     // Add get_number.cairo contract to the state
 
     let path = PathBuf::from("starknet_programs/get_number.json");
-    let contract_class = ContractClass::try_from(path).unwrap();
+    let contract_class = ContractClass::from_path(path).unwrap();
 
     let address = Address(Felt252::one()); // const CONTRACT_ADDRESS = 1;
     let class_hash = [2; 32];
@@ -48,7 +47,7 @@ fn delegate_call() {
     // ---------------------------------------------------------
 
     let path = PathBuf::from("starknet_programs/delegate_call.json");
-    let contract_class = ContractClass::try_from(path).unwrap();
+    let contract_class = ContractClass::from_path(path).unwrap();
     let entry_points_by_type = contract_class.entry_points_by_type().clone();
 
     // External entry point, delegate_call function delegate.cairo:L13
@@ -77,7 +76,7 @@ fn delegate_call() {
     //*    Create state with previous data
     //* ---------------------------------------
 
-    let mut state = CachedState::new(state_reader, Some(contract_class_cache), None);
+    let mut state = CachedState::new(Arc::new(state_reader), Some(contract_class_cache), None);
 
     //* ------------------------------------
     //*    Create execution entry point
@@ -120,7 +119,7 @@ fn delegate_call() {
             &mut resources_manager,
             &mut tx_execution_context,
             false,
-            false
+            block_context.invoke_tx_max_n_steps()
         )
         .is_ok());
 }
