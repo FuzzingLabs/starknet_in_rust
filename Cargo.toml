@@ -14,7 +14,7 @@ cairo_1_tests = []
 members = ["cli", "fuzzer", "rpc_state_reader"]
 
 [workspace.dependencies]
-cairo-vm = { version = "0.8.5", features = ["cairo-1-hints"] }
+cairo-vm = { git="https://github.com/FuzzingLabs/cairo-rs",rev="48af153240392992f18a09e969bae6518eec9639", features = ["cairo-1-hints"]}
 starknet_api = "0.3.0"
 num-traits = "0.2.15"
 starknet = "0.5.0"
@@ -31,7 +31,7 @@ cairo-lang-casm = { workspace = true }
 cairo-lang-runner = { workspace = true }
 cairo-lang-sierra = { workspace = true }
 cairo-lang-utils = { workspace = true }
-cairo-vm = { workspace = true, features = ["cairo-1-hints"] }
+cairo-vm = { git="https://github.com/FuzzingLabs/cairo-rs",rev="48af153240392992f18a09e969bae6518eec9639", features = ["cairo-1-hints"]}
 getset = "0.1.2"
 lazy_static = "1.4.0"
 num-bigint = { version = "0.4", features = ["serde"] }
