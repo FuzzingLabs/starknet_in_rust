@@ -244,6 +244,7 @@ impl ExecutionEntryPoint {
         l2_to_l1_messages: Vec<OrderedL2ToL1Message>,
         internal_calls: Vec<CallInfo>,
         retdata: Vec<Felt252>,
+        trace: Vec<(u32, u32)>,
     ) -> Result<CallInfo, TransactionError> {
         let execution_resources = &resources_manager.cairo_usage - &previous_cairo_usage;
 
@@ -265,6 +266,7 @@ impl ExecutionEntryPoint {
             internal_calls,
             failure_flag: false,
             gas_consumed: 0,
+            trace: trace,
         })
     }
 
@@ -277,6 +279,7 @@ impl ExecutionEntryPoint {
         l2_to_l1_messages: Vec<OrderedL2ToL1Message>,
         internal_calls: Vec<CallInfo>,
         call_result: CallResult,
+        trace: Vec<(u32, u32)>,
     ) -> Result<CallInfo, TransactionError> {
         let execution_resources = &resources_manager.cairo_usage - &previous_cairo_usage;
 
@@ -302,6 +305,7 @@ impl ExecutionEntryPoint {
             internal_calls,
             failure_flag: !call_result.is_success,
             gas_consumed: call_result.gas_consumed,
+            trace: trace,
         })
     }
 
@@ -341,7 +345,7 @@ impl ExecutionEntryPoint {
         let entry_point = self.get_selected_entry_point_v0(&contract_class, class_hash)?;
 
         // create starknet runner
-        let mut vm = VirtualMachine::new(false);
+        let mut vm = VirtualMachine::new(true);
         let mut cairo_runner = CairoRunner::new(&contract_class.program, "starknet", false)?;
         cairo_runner.initialize_function_runner(&mut vm)?;
 
@@ -420,7 +424,17 @@ impl ExecutionEntryPoint {
         resources_manager.cairo_usage += &runner.get_execution_resources()?;
 
         let retdata = runner.get_return_values()?;
-
+        let mut vec_trace: Vec<(u32, u32)> = vec![];
+        for tr in runner.vm.get_trace() {
+            vec_trace.push((
+                tr.pc
+                    .try_into()
+                    .expect("Failed to transform offset into u32"),
+                tr.fp
+                    .try_into()
+                    .expect("Failed to transform offset into u32"),
+            ));
+        }
         self.build_call_info_deprecated::<S>(
             previous_cairo_usage,
             resources_manager,
@@ -429,6 +443,7 @@ impl ExecutionEntryPoint {
             runner.hint_processor.syscall_handler.l2_to_l1_messages,
             runner.hint_processor.syscall_handler.internal_calls,
             retdata,
+            vec_trace,
         )
     }
 
@@ -448,7 +463,7 @@ impl ExecutionEntryPoint {
         let entry_point = self.get_selected_entry_point(&contract_class, class_hash)?;
 
         // create starknet runner
-        let mut vm = VirtualMachine::new(false);
+        let mut vm = VirtualMachine::new(true);
         // get a program from the casm contract class
         let program: Program = contract_class.as_ref().clone().try_into()?;
         // create and initialize a cairo runner for running cairo 1 programs.
@@ -571,6 +586,18 @@ impl ExecutionEntryPoint {
         resources_manager.cairo_usage += &runner.get_execution_resources()?;
 
         let call_result = runner.get_call_result(self.initial_gas)?;
+        let mut vec_trace: Vec<(u32, u32)> = vec![];
+        let traces = runner.vm.get_trace();
+        for tr in traces {
+            vec_trace.push((
+                tr.pc
+                    .try_into()
+                    .expect("Failed to transform offset into u32"),
+                tr.fp
+                    .try_into()
+                    .expect("Failed to transform offset into u32"),
+            ));
+        }
         self.build_call_info::<S>(
             previous_cairo_usage,
             resources_manager,
@@ -579,6 +606,7 @@ impl ExecutionEntryPoint {
             runner.hint_processor.syscall_handler.l2_to_l1_messages,
             runner.hint_processor.syscall_handler.internal_calls,
             call_result,
+            vec_trace,
         )
     }
 }
