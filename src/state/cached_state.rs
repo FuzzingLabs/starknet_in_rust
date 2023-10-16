@@ -29,7 +29,7 @@ pub const UNINITIALIZED_CLASS_HASH: &ClassHash = b"\x00\x00\x00\x00\x00\x00\x00\
 #[derive(Default, Clone, Debug, Eq, Getters, MutGetters, PartialEq)]
 pub struct CachedState<T: StateReader> {
     pub state_reader: Arc<T>,
-    #[getset(get = "pub", get_mut = "pub")]
+    #[getset(set = "pub", get = "pub", get_mut = "pub")]
     pub(crate) cache: StateCache,
     #[get = "pub"]
     pub(crate) contract_classes: Option<ContractClassCache>,
