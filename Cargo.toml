@@ -27,7 +27,7 @@ cairo-lang-casm = "=2.5.4"
 cairo-lang-sierra = "=2.5.4"
 cairo-lang-starknet = "=2.5.4"
 cairo-lang-utils = "=2.5.4"
-cairo-vm = { git ="https://github.com/FuzzingLabs/starknet_in_rust", rev = "3c9fd45d0e3fabb5ca1cf088bc22db5e512fea45", features = ["cairo-1-hints"] }
+cairo-vm = { git ="https://github.com/FuzzingLabs/cairo-rs", rev = "3c9fd45d0e3fabb5ca1cf088bc22db5e512fea45", features = ["cairo-1-hints"] }
 num-traits = "0.2.15"
 starknet = "0.5.0"
 starknet_api = {version = "0.7.0-dev.0"}
